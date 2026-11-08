@@ -4,7 +4,7 @@ import logging
 import re
 import urllib.parse
 from copy import deepcopy
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import requests
@@ -513,6 +513,30 @@ class Shopgoodwill:
         return self.shopgoodwill_session.get(
             f"{Shopgoodwill.API_ROOT}/itemDetail/GetItemDetailModelByItemId/{item_id}"
         ).json()
+
+    def get_item_info_timed(
+        self, item_id: int
+    ) -> Tuple[Dict, datetime.timedelta, datetime.timedelta]:
+        """
+        Fetch item details and estimate the offset between
+        the server clock and the local clock.
+
+        The server's serverTime is assumed to have been stamped
+        at the midpoint of the request's round trip,
+        so the estimate is accurate to within half the round trip time.
+
+        :param item_id: A valid item ID
+        :return: (item_info, clock_offset, round_trip_time), where
+            clock_offset = server clock minus local clock
+        """
+
+        sent = datetime.datetime.now(datetime.timezone.utc)
+        item_info = self.get_item_info(item_id)
+        received = datetime.datetime.now(datetime.timezone.utc)
+
+        rtt = received - sent
+        server_now = Shopgoodwill.parse_timestamp_precise(item_info["serverTime"])
+        return item_info, server_now - (sent + rtt / 2), rtt
 
     def get_item_bid_info(self, item_id: int) -> Dict:
         """

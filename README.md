@@ -1,3 +1,26 @@
+# Sniper web UI (fork additions)
+
+Double-click `start_sniper.bat` (or run `python webapp.py`) and a page opens at
+http://127.0.0.1:5000. From there you can:
+
+- Paste an auction URL or item number with your max bid. The max goes in once,
+  a few seconds before the end, timed to ShopGoodwill's clock.
+- See each item's status: Uncontested, Quiet, Active, Contested, or Priced out.
+- Edit or cancel a max, and turn alerts on or off per item.
+- Set the snipe time, alert times, "contested" thresholds, and notifications
+  (ntfy phone push and Windows toasts), then send a test notification.
+
+It always starts in DRY RUN. Click "Go live" on the page to place real bids.
+
+The watchlist lives in your ShopGoodwill favorites: each tracked item's note is
+`{"max_bid": 9.0, "alerts": true}`. Favorites without such a note are listed
+separately and are never bid on.
+
+`python check_access.py` is a read-only check of login, favorites and the clock.
+Tests: `pip install -r requirements-dev.txt` then `python -m pytest tests`.
+
+---
+
 # ShopGoodwill Scripts
 A collection of scripts for programmatically interacting with [ShopGoodwill](https://shopgoodwill.com).
 

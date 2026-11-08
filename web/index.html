@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goodwill Sniper</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --ink: #1d1d1b; --muted: #6b6b66; --line: #dcdcd6; --bg: #f6f5f1; --panel: #ffffff;
+    --amber: #a86400; --amber-bg: #fff3dc; --red: #b3261e; --red-bg: #fde7e5;
+    --green: #2e6b34; --green-bg: #e3f1e3; --blue: #24527a; --blue-bg: #e4edf6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px 10px; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  .mode { display: flex; align-items: center; gap: 12px; padding: 8px 20px; font-weight: 600; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .mode.dry { background: var(--amber-bg); color: var(--amber); }
+  .mode.live { background: var(--red-bg); color: var(--red); }
+  .mode button { margin-left: auto; }
+  main { padding: 16px 20px 40px; max-width: 1200px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; margin-bottom: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  form.add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=number] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+  input.item { flex: 1 1 340px; }
+  input.money { width: 90px; text-align: right; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid #bdbdb5; border-radius: 4px; background: #fff; cursor: pointer; }
+  button:hover { background: #f0efea; }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  button.primary:hover { background: #3a3a37; }
+  button.danger { color: var(--red); border-color: #e3b4b0; }
+  button.small { padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+  .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+  .msg.err { color: var(--red); } .msg.ok { color: var(--green); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 7px 8px; border-bottom: 1px solid #ecebe6; vertical-align: middle; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.title a { color: var(--ink); text-decoration: none; }
+  td.title a:hover { text-decoration: underline; }
+  td.title .sub { color: var(--muted); font-size: 12px; }
+  .ends { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ends.soon { color: var(--red); font-weight: 600; }
+  .ends.over { color: var(--muted); }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .chip.Uncontested { background: var(--green-bg); color: var(--green); }
+  .chip.Quiet { background: var(--blue-bg); color: var(--blue); }
+  .chip.Active { background: var(--amber-bg); color: var(--amber); }
+  .chip.Contested { background: var(--red-bg); color: var(--red); }
+  .chip.out { background: #eee; color: #555; }
+  .detail { color: var(--muted); font-size: 12px; }
+  .maxcell { white-space: nowrap; }
+  .empty { color: var(--muted); padding: 10px 0; }
+  details summary { cursor: pointer; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; align-items: center; margin-top: 12px; }
+  .grid label { color: var(--muted); font-size: 13px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .log { font: 12px/1.5 ui-monospace, Consolas, monospace; max-height: 320px; overflow: auto; }
+  .log div { padding: 1px 0; white-space: pre-wrap; }
+  .log .WARNING { color: #5a3d00; } .log .ERROR, .log .CRITICAL { color: var(--red); }
+  .log .t { color: var(--muted); margin-right: 8px; }
+  .banner-err { background: var(--red-bg); color: var(--red); padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Goodwill Sniper</h1>
+  <span class="meta" id="meta">connecting...</span>
+</header>
+<div class="mode dry" id="mode">
+  <span id="modeText">DRY RUN: no real bids will be placed</span>
+  <button id="modeBtn" type="button">Go live</button>
+</div>
+<main>
+  <div class="banner-err" id="err"></div>
+
+  <section>
+    <h2>Add an auction</h2>
+    <form class="add" id="addForm">
+      <input class="item" type="text" id="addItem" placeholder="Paste a ShopGoodwill URL or item number" autocomplete="off" required>
+      <span>$</span><input class="money" type="number" id="addMax" step="0.01" min="0.01" placeholder="Max bid">
+      <label><input type="checkbox" id="addAlerts" checked> Alerts</label>
+      <button class="primary" type="submit">Add</button>
+    </form>
+    <div class="hint">Leave max blank to watch with alerts only. Your max goes in once, a few seconds before the end.</div>
+    <div class="msg" id="addMsg"></div>
+  </section>
+
+  <section>
+    <h2>Watchlist</h2>
+    <table>
+      <thead><tr>
+        <th>Item</th><th>Ends in</th><th class="num">Price</th><th class="num">Min bid</th>
+        <th>Your max</th><th>Status</th><th>Alerts</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="emptyRows">Nothing tracked yet. Add an auction above.</div>
+  </section>
+
+  <section id="otherSection" style="display:none">
+    <details>
+      <summary>Other favorites (not tracked) <span id="otherCount"></span></summary>
+      <table style="margin-top:10px"><tbody id="otherRows"></tbody></table>
+    </details>
+  </section>
+
+  <section>
+    <details id="settingsBox">
+      <summary>Settings</summary>
+      <form id="settingsForm">
+        <div class="grid">
+          <label for="sSnipe">Bid this many seconds before the end</label>
+          <div><input type="number" id="sSnipe" min="1" max="120" step="0.5" class="money"> <span class="hint">5 is a good default; your clock offset is corrected automatically</span></div>
+          <label for="sAlerts">Alert times</label>
+          <div><input type="text" id="sAlerts" style="width:320px"> <span class="hint">comma separated, e.g. 1 hour, 10 minutes, 1 minute</span></div>
+          <label>"Contested" means</label>
+          <div><input type="number" id="sMinBids" min="1" class="money"> bids from at least <input type="number" id="sMinBidders" min="1" class="money"> bidders in the last <input type="number" id="sWindow" min="1" class="money"> minutes</div>
+          <label for="sTopic">ntfy topic (phone push)</label>
+          <div><input type="text" id="sTopic" style="width:240px" placeholder="empty = off"> <button type="button" class="small" id="genTopic">Generate</button> <span class="hint">subscribe to this topic in the ntfy app; anyone who knows the name can read it, so keep it random</span></div>
+          <label for="sServer">ntfy server</label>
+          <div><input type="text" id="sServer" style="width:240px"></div>
+          <label for="sToast">Windows notifications</label>
+          <div><input type="checkbox" id="sToast"></div>
+          <div></div>
+          <div><button class="primary" type="submit">Save settings</button> <button type="button" id="testNotify">Send test notification</button></div>
+        </div>
+        <div class="msg" id="settingsMsg"></div>
+      </form>
+    </details>
+  </section>
+
+  <section>
+    <h2>Activity</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+let serverOffsetMs = 0;      // server clock minus browser clock
+let state = null;
+let settingsLoaded = false;
+const rowEls = new Map();
+
+const $ = (id) => document.getElementById(id);
+const money = (v) => (v === null || v === undefined) ? "" : "$" + Number(v).toFixed(2);
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function showMsg(el, text, ok) { el.textContent = text; el.className = "msg " + (ok ? "ok" : "err"); }
+
+function fmtLeft(ms) {
+  if (ms <= 0) return "ended";
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60), sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${String(sec).padStart(2, "0")}s`;
+  return `${m}m ${String(sec).padStart(2, "0")}s`;
+}
+
+function tick() {
+  const now = Date.now() + serverOffsetMs;
+  document.querySelectorAll(".ends[data-end]").forEach((el) => {
+    const left = Date.parse(el.dataset.end) - now;
+    el.textContent = fmtLeft(left);
+    el.className = "ends" + (left <= 0 ? " over" : left < 10 * 60 * 1000 ? " soon" : "");
+  });
+}
+
+function makeRow(item) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td class="title"><a target="_blank" rel="noopener"></a><div class="sub"></div></td>
+    <td><span class="ends"></span></td>
+    <td class="num price"></td>
+    <td class="num minbid"></td>
+    <td class="maxcell"><input class="money max" type="number" step="0.01" min="0.01" placeholder="none">
+        <button class="small save" type="button">Save</button></td>
+    <td><span class="chip"></span><div class="detail"></div></td>
+    <td><input class="alerts" type="checkbox"></td>
+    <td><button class="small danger cancel" type="button">Cancel bid</button></td>`;
+  const maxIn = tr.querySelector(".max");
+  maxIn.addEventListener("input", () => { maxIn.dataset.dirty = "1"; });
+  maxIn.addEventListener("keydown", (e) => { if (e.key === "Enter") tr.querySelector(".save").click(); });
+  tr.querySelector(".save").addEventListener("click", () => saveItem(item.id, tr, maxIn.value));
+  tr.querySelector(".alerts").addEventListener("change", () => saveItem(item.id, tr, maxIn.dataset.dirty ? maxIn.value : (tr.dataset.max || "")));
+  tr.querySelector(".cancel").addEventListener("click", () => {
+    if (confirm("Cancel the bid on this item? It stays on your watchlist with alerts.")) saveItem(item.id, tr, "");
+  });
+  return tr;
+}
+
+function updateRow(tr, item) {
+  const a = tr.querySelector(".title a");
+  a.href = item.url; a.textContent = item.title;
+  tr.querySelector(".title .sub").textContent = "#" + item.id + (item.error ? "  (details unavailable: " + item.error + ")" : "");
+  const ends = tr.querySelector(".ends");
+  if (item.end_utc) ends.dataset.end = item.end_utc;
+  tr.querySelector(".price").textContent = money(item.current_price);
+  tr.querySelector(".minbid").textContent = money(item.minimum_bid);
+  tr.dataset.max = item.max_bid ?? "";
+  const maxIn = tr.querySelector(".max");
+  if (document.activeElement !== maxIn && !maxIn.dataset.dirty) maxIn.value = item.max_bid ? Number(item.max_bid).toFixed(2) : "";
+  const chip = tr.querySelector(".chip"), detail = tr.querySelector(".detail");
+  if (item.priced_out) { chip.className = "chip out"; chip.textContent = "Priced out"; }
+  else if (item.label) { chip.className = "chip " + item.label; chip.textContent = item.label; }
+  else { chip.className = ""; chip.textContent = ""; }
+  let d = item.detail || "";
+  if (item.max_bid && item.pct_of_max !== null && item.pct_of_max !== undefined && !item.priced_out) d += (d ? " | " : "") + item.pct_of_max + "% of your max";
+  if (!item.max_bid) d += (d ? " | " : "") + "alerts only, no bid";
+  detail.textContent = d;
+  const al = tr.querySelector(".alerts");
+  if (document.activeElement !== al) al.checked = !!item.alerts;
+  tr.querySelector(".cancel").style.visibility = item.max_bid ? "visible" : "hidden";
+}
+
+async function saveItem(id, tr, maxValue) {
+  const alerts = tr.querySelector(".alerts").checked;
+  try {
+    await api("/api/items/" + id, { max_bid: maxValue === "" ? null : Number(maxValue), alerts });
+    delete tr.querySelector(".max").dataset.dirty;
+    $("err").style.display = "none";
+    refresh();
+  } catch (e) { showError("Save failed: " + e.message); }
+}
+
+function render(s) {
+  state = s;
+  serverOffsetMs = Date.parse(s.server_now_utc) - Date.now();
+
+  const off = s.clock_offset_seconds;
+  $("meta").textContent = (s.sniper_alive ? "sniper running" : "SNIPER STOPPED") +
+    (off === null ? "" : ` | your clock is ${(-off >= 0 ? "+" : "") + (-off).toFixed(2)}s vs ShopGoodwill (corrected)`);
+
+  const mode = $("mode");
+  mode.className = "mode " + (s.dry_run ? "dry" : "live");
+  $("modeText").textContent = s.dry_run ? "DRY RUN: no real bids will be placed" : "LIVE: real bids WILL be placed";
+  $("modeBtn").textContent = s.dry_run ? "Go live" : "Back to dry run";
+
+  if (s.error) showError(s.error); else $("err").style.display = "none";
+
+  const tracked = s.items.filter((i) => i.tracked), other = s.items.filter((i) => !i.tracked);
+  const tbody = $("rows"), seen = new Set();
+  tracked.forEach((item) => {
+    let tr = rowEls.get(item.id);
+    if (!tr) { tr = makeRow(item); rowEls.set(item.id, tr); }
+    tbody.appendChild(tr);   // re-appending keeps the server's sort order
+    updateRow(tr, item);
+    seen.add(item.id);
+  });
+  for (const [id, tr] of rowEls) if (!seen.has(id)) { tr.remove(); rowEls.delete(id); }
+  $("emptyRows").style.display = tracked.length ? "none" : "block";
+
+  $("otherSection").style.display = other.length ? "block" : "none";
+  $("otherCount").textContent = other.length ? `(${other.length})` : "";
+  const ob = $("otherRows"); ob.innerHTML = "";
+  other.forEach((item) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="title"><a target="_blank" rel="noopener"></a><div class="sub"></div></td><td><span class="ends"></span></td><td><button class="small" type="button">Track</button></td>`;
+    const a = tr.querySelector("a"); a.href = item.url; a.textContent = item.title;
+    tr.querySelector(".sub").textContent = item.raw_note ? "note: " + item.raw_note : "#" + item.id;
+    if (item.end_utc) tr.querySelector(".ends").dataset.end = item.end_utc;
+    tr.querySelector("button").addEventListener("click", () => {
+      const v = prompt("Max bid for this item (leave blank for alerts only).\nThis replaces its current note.");
+      if (v === null) return;
+      api("/api/items/" + item.id, { max_bid: v.trim() === "" ? null : Number(v), alerts: true }).then(refresh).catch((e) => showError(e.message));
+    });
+    ob.appendChild(tr);
+  });
+
+  if (!settingsLoaded) { fillSettings(s.settings); settingsLoaded = true; }
+
+  const log = $("log"); log.innerHTML = "";
+  s.log.forEach((e) => {
+    const div = document.createElement("div"); div.className = e.level;
+    const t = document.createElement("span"); t.className = "t"; t.textContent = e.time;
+    div.appendChild(t); div.appendChild(document.createTextNode(e.message));
+    log.appendChild(div);
+  });
+  tick();
+}
+
+function fillSettings(st) {
+  $("sSnipe").value = st.snipe_seconds;
+  $("sAlerts").value = st.alert_times.join(", ");
+  $("sMinBids").value = st.contest_min_bids;
+  $("sMinBidders").value = st.contest_min_bidders;
+  $("sWindow").value = st.contest_window_minutes;
+  $("sTopic").value = st.ntfy_topic;
+  $("sServer").value = st.ntfy_server;
+  $("sToast").checked = st.windows_toast;
+}
+
+function showError(text) { const e = $("err"); e.textContent = text; e.style.display = "block"; }
+
+async function refresh() {
+  try { render(await api("/api/state")); }
+  catch (e) { showError("Can't reach the sniper: " + e.message); $("meta").textContent = "disconnected"; }
+}
+
+$("addForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const maxV = $("addMax").value;
+  try {
+    await api("/api/items", { item: $("addItem").value, max_bid: maxV === "" ? null : Number(maxV), alerts: $("addAlerts").checked });
+    showMsg($("addMsg"), "Added.", true);
+    $("addItem").value = ""; $("addMax").value = "";
+    refresh();
+  } catch (e) { showMsg($("addMsg"), e.message, false); }
+});
+
+$("modeBtn").addEventListener("click", async () => {
+  const goLive = state && state.dry_run;
+  if (goLive && !confirm("Go LIVE? Real bids will be placed for every item with a max.")) return;
+  try { await api("/api/dry-run", { enabled: !goLive }); refresh(); }
+  catch (e) { showError(e.message); }
+});
+
+$("settingsForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    const r = await api("/api/settings", {
+      snipe_seconds: Number($("sSnipe").value),
+      alert_times: $("sAlerts").value.split(","),
+      contest_min_bids: Number($("sMinBids").value),
+      contest_min_bidders: Number($("sMinBidders").value),
+      contest_window_minutes: Number($("sWindow").value),
+      ntfy_topic: $("sTopic").value,
+      ntfy_server: $("sServer").value,
+      windows_toast: $("sToast").checked,
+    });
+    fillSettings(r.settings);
+    showMsg($("settingsMsg"), "Saved.", true);
+  } catch (e) { showMsg($("settingsMsg"), e.message, false); }
+});
+
+$("genTopic").addEventListener("click", () => {
+  const bytes = new Uint8Array(9); crypto.getRandomValues(bytes);
+  $("sTopic").value = "sgw-" + Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 16);
+});
+
+$("testNotify").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/test-notify", {});
+    showMsg($("settingsMsg"), `Phone (ntfy): ${r.result.ntfy}. Windows: ${r.result.windows}. Save settings first if you just changed them.`, !/error/.test(JSON.stringify(r.result)));
+  } catch (e) { showMsg($("settingsMsg"), e.message, false); }
+});
+
+refresh();
+setInterval(refresh, 5000);
+setInterval(tick, 250);
+</script>
+</body>
+</html>

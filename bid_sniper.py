@@ -345,31 +345,11 @@ class BidSniper:
         self, item_id: int
     ) -> Tuple[Dict, datetime.timedelta, datetime.timedelta]:
         """
-        Fetch item details and estimate the offset between
-        the server clock and the local clock.
-
-        The server's serverTime is assumed to have been stamped
-        at the midpoint of the request's round trip,
-        so the estimate is accurate to within half the round trip time.
-
-        :param item_id: A valid ShopGoodwill item ID
-        :type item_id: int
-        :return: (item_info, clock_offset, round_trip_time), where
-            clock_offset = server clock minus local clock
-        :rtype: Tuple[Dict, datetime.timedelta, datetime.timedelta]
+        Fetch item details and the server clock offset
+        (see Shopgoodwill.get_item_info_timed)
         """
 
-        sent = datetime.datetime.now(datetime.timezone.utc)
-        item_info = self.shopgoodwill_client.get_item_info(item_id)
-        received = datetime.datetime.now(datetime.timezone.utc)
-
-        rtt = received - sent
-        server_now = shopgoodwill.Shopgoodwill.parse_timestamp_precise(
-            item_info["serverTime"]
-        )
-        clock_offset = server_now - (sent + rtt / 2)
-
-        return item_info, clock_offset, rtt
+        return self.shopgoodwill_client.get_item_info_timed(item_id)
 
     async def place_bid(
         self, item_id: int, fallback_end_time: datetime.datetime
