@@ -1,4 +1,4 @@
-import json
+
 import responses, pytest
 from requests.exceptions import HTTPError
 import shopgoodwill as sgwmod

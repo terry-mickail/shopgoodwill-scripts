@@ -1,4 +1,4 @@
-import asyncio, datetime, json
+import asyncio, datetime
 import responses
 from conftest import API, item_payload, favorites_payload
 import shopgoodwill as sgwmod

@@ -1,6 +1,6 @@
-import asyncio, datetime, json, time
+import asyncio, datetime, json
 import responses
-from conftest import API, item_payload, favorites_payload, pt_str
+from conftest import API, item_payload, favorites_payload
 import shopgoodwill as sgwmod
 
 def test_precise_parse_fraction_lengths():

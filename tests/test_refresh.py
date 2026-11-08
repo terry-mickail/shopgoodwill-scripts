@@ -1,6 +1,6 @@
-import asyncio, datetime, threading, time
+import threading, time
 import responses
-from conftest import API, favorites_payload
+from conftest import API
 
 @responses.activate
 def test_request_refresh_wakes_main_loop(make_sniper):
