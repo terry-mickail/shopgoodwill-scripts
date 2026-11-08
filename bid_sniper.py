@@ -220,10 +220,12 @@ class BidSniper:
         :rtype: None
         """
 
+        # total_seconds, not .seconds: .seconds ignores whole days, so a cache
+        # stamped in 1970 (the initial value) could look fresh
         if (
             datetime.datetime.now(datetime.timezone.utc)
             - self.favorites_cache["last_updated"]
-        ).seconds > max_cache_time:
+        ).total_seconds() > max_cache_time:
             try:
                 self.favorites_cache = {
                     "favorites": self.shopgoodwill_client.get_favorites(),
@@ -565,6 +567,28 @@ class BidSniper:
         self.logger.warning(f"Could not confirm the result for '{title}' - check the site")
         return None
 
+    def request_refresh(self) -> None:
+        """
+        Thread-safe: make the main loop re-read favorites and schedule
+        new items right away, instead of waiting up to refresh_seconds.
+        Used by the web UI after adding or editing an item.
+        """
+
+        self.favorites_cache["last_updated"] = datetime.datetime(
+            1970, 1, 1, tzinfo=datetime.timezone.utc
+        )
+        wake = getattr(self, "_wake", None)
+        if wake is not None:
+            self.event_loop.call_soon_threadsafe(wake.set)
+
+    def set_dry_run(self, dry_run: bool) -> None:
+        """
+        Switch dry-run on or off; applies to the next bid that fires
+        """
+
+        self.dry_run = dry_run
+        self.dry_run_msg = "DRY-RUN: " if dry_run else ""
+
     def start(self) -> None:
         """
         Simple method to start the bid sniper instance's event loop
@@ -581,15 +605,18 @@ class BidSniper:
             "favorites_max_cache_seconds", 60
         )
 
-        # sort all tasks to schedule (time alerts and bid placing) from "soonest" to "futhest"
-        # once sorted, use the "soonest" delta to determine when to schedule events
-        min_scheduling_timedelta = sorted(
-            self.alert_time_deltas
-            + [self.bid_time_delta + self.bid_preflight_delta]
-        )[::-1][0]
+        self._wake = asyncio.Event()
 
         while True:
             now = datetime.datetime.now(datetime.timezone.utc)
+
+            # sort all tasks to schedule (time alerts and bid placing) from "soonest" to "futhest"
+            # once sorted, use the "soonest" delta to determine when to schedule events.
+            # Recomputed every pass so settings changed from the web UI take effect.
+            min_scheduling_timedelta = sorted(
+                self.alert_time_deltas
+                + [self.bid_time_delta + self.bid_preflight_delta]
+            )[::-1][0]
 
             # update favorites
             self.update_favorites_cache(favorites_cache_max_seconds)
@@ -659,7 +686,12 @@ class BidSniper:
                         item_id, note=self.default_note
                     )
 
-            await asyncio.sleep(refresh_seconds)
+            # sleep until the next refresh, or until request_refresh() wakes us
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=refresh_seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
 
 
 def parse_args():
