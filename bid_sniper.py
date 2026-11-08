@@ -688,6 +688,12 @@ def main():
         config = json.load(f)
 
     bid_sniper = BidSniper(config, args.dry_run)
+
+    # phone push / Windows notifications (see notify.py)
+    import notify
+
+    notify.attach_notifiers(bid_sniper.logger, config)
+
     bid_sniper.start()
 
 

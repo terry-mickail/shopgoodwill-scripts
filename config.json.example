@@ -52,6 +52,11 @@
         ],
         "favorite_default_note": "{\"max_bid\": 0.99}"
     },
+    "notifications": {
+        "ntfy_server": "https://ntfy.sh",
+        "ntfy_topic": "",
+        "windows_toast": true
+    },
     "seen_listings_filename": "seen_listings.json",
     "saved_queries": {
         "tuscon_pick_up_only": {
