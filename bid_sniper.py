@@ -389,6 +389,16 @@ class BidSniper:
                 f"bid fires {self.bid_time_delta.total_seconds():g}s before end"
             )
 
+            # Don't send a bid that's sure to be rejected:
+            # minimumBid is the lowest amount SGW will accept right now
+            minimum_bid = item_info.get("minimumBid", None)
+            if minimum_bid is not None and float(minimum_bid) > max_bid:
+                self.logger.warning(
+                    f"Priced out of '{favorite['title']}' - minimum bid is "
+                    f"{float(minimum_bid):.2f}, your max is {max_bid:.2f}. Not bidding."
+                )
+                return None
+
             # if we want to use the friend_list feature,
             # don't bid if the current highest bidder is on our friend list
             if self.config.get("friend_list", list()):
