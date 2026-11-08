@@ -7,7 +7,6 @@ import json
 import logging
 import logging.config
 import queue
-from json.decoder import JSONDecodeError
 from logging.handlers import QueueHandler, QueueListener
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -17,6 +16,7 @@ from requests.exceptions import HTTPError
 from requests.models import Response
 
 import shopgoodwill
+import watchlist
 
 
 def get_timedelta_to_time(
@@ -295,18 +295,49 @@ class BidSniper:
             self.config["bid_sniper"].get("favorites_max_cache_seconds", 60)
         )
 
-        # Check if we still want to alert on this item
+        # Check if we still want to alert on this item:
+        # it must still be a favorite, be tracked, and have alerts on
         favorite = self.favorites_cache["favorites"].get(item_id, None)
-        if favorite:
-            delta_until_end = get_timedelta_to_time(end_time)
-            delta_until_end = end_time.replace(microsecond=0) - datetime.datetime.now(
-                datetime.timezone.utc
-            ).replace(microsecond=0)
-            self.logger.warning(
-                f"Time alert - {favorite['title']} ending in {delta_until_end}"
+        if not favorite:
+            return None
+        tracked = watchlist.parse_note(favorite.get("notes", None))
+        if not tracked or not tracked["alerts"]:
+            return None
+
+        delta_until_end = end_time.replace(microsecond=0) - datetime.datetime.now(
+            datetime.timezone.utc
+        ).replace(microsecond=0)
+        message = f"Time alert - {favorite['title']} ending in {delta_until_end}"
+
+        # add the contest label and price vs max, if item details are available
+        try:
+            item_info = self.shopgoodwill_client.get_item_info(item_id)
+            status = watchlist.contest_status(
+                item_info, max_bid=tracked["max_bid"], **self.contest_settings()
+            )
+            message += " | " + watchlist.describe(status, tracked["max_bid"])
+        except BaseException as be:
+            self.logger.debug(
+                f"{type(be).__name__} getting item details for time alert - {be}"
             )
 
+        self.logger.warning(
+            message,
+            extra=self.notify_extra(f"Ending in {delta_until_end}", item_id, priority=3),
+        )
         return None
+
+    def contest_settings(self) -> Dict:
+        """
+        Contest-detection thresholds from config (see watchlist.contest_status)
+        """
+
+        conf = self.config["bid_sniper"]
+        return {
+            "window_minutes": float(conf.get("contest_window_minutes", 30)),
+            "min_bids": int(conf.get("contest_min_bids", 3)),
+            "min_bidders": int(conf.get("contest_min_bidders", 2)),
+        }
 
     def fetch_item_info_timed(
         self, item_id: int
@@ -371,25 +402,10 @@ class BidSniper:
         if not favorite:
             return None
 
-        notes = favorite.get("notes", None)
-        if not notes:
+        tracked = watchlist.parse_note(favorite.get("notes", None))
+        if not tracked or not tracked["max_bid"]:
             return None
-
-        try:
-            notes_js = json.loads(notes)
-        except JSONDecodeError:
-            # TODO should this be treated as an error? I don't think so.
-            return None
-
-        max_bid = notes_js.get("max_bid", None)
-        if not max_bid:
-            return None
-
-        try:
-            max_bid = float(max_bid)
-        except ValueError:
-            self.logger.error(f"ValueError casting max_bid value '{max_bid}' as float")
-            return None
+        max_bid = tracked["max_bid"]
 
         # Fetch item details once, now (during the preflight window):
         # it gives us the server clock, the authoritative end time,

@@ -36,6 +36,10 @@
         "refresh_seconds": 300,
         "bid_snipe_time_delta": "5 seconds",
         "bid_preflight_seconds": 20,
+        "result_check_delay_seconds": 60,
+        "contest_window_minutes": 30,
+        "contest_min_bids": 3,
+        "contest_min_bidders": 2,
         "favorites_max_cache_seconds": 60,
         "friend_list": [],
         "alert_time_deltas": [
