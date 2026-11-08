@@ -175,6 +175,11 @@ class BidSniper:
             seconds=float(self.config["bid_sniper"].get("bid_preflight_seconds", 20))
         )
 
+        # after a real bid, how long to wait (per attempt) before checking the result
+        self.result_check_delay_seconds = float(
+            self.config["bid_sniper"].get("result_check_delay_seconds", 60)
+        )
+
         self.favorites_cache = {
             "last_updated": datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc),
             "favorites": dict(),
@@ -185,6 +190,25 @@ class BidSniper:
         )  # Will contain itemIds tentatively scheduled for actions
 
         return
+
+    @staticmethod
+    def notify_extra(title: str, item_id: int, priority: int = 3) -> Dict:
+        """
+        Build the logging `extra` dict that marks a log record
+        for push/desktop notification (see notify.py)
+
+        :param title: Short notification title
+        :param item_id: Item the notification is about (used for the click-through URL)
+        :param priority: 1 (min) to 5 (max), ntfy-style
+        :rtype: Dict
+        """
+
+        return {
+            "notify": True,
+            "notify_title": title,
+            "notify_url": f"https://shopgoodwill.com/item/{item_id}",
+            "notify_priority": priority,
+        }
 
     def update_favorites_cache(self, max_cache_time: int) -> None:
         """
@@ -424,26 +448,105 @@ class BidSniper:
             await asyncio.sleep(delay)
 
         # Finally place a bid
-        if not self.dry_run:
-            # TODO in the future, address how SGW uses quantity
-            # I don't think they use it in auctions
-            #
-            # Note that the account used is bidding_shopgoodwill_client
+        title = favorite["title"]
+        if self.dry_run:
+            self.logger.warning(
+                f"{self.dry_run_msg}Placing bid on '{title}' for {max_bid}",
+                extra=self.notify_extra("Dry-run bid", item_id, priority=3),
+            )
+            return None
+
+        # TODO in the future, address how SGW uses quantity
+        # I don't think they use it in auctions
+        #
+        # Note that the account used is bidding_shopgoodwill_client
+        try:
+            result = self.bid_shopgoodwill_client.place_bid(
+                item_id, max_bid, favorite["sellerId"], quantity=1
+            )
+        except HTTPError as he:
+            self.logger.error(
+                f"HTTPError placing bid on '{title}' - {he}",
+                extra=self.notify_extra("Bid FAILED", item_id, priority=5),
+            )
+            return None
+
+        outcome = result["outcome"]
+        if outcome == shopgoodwill.Shopgoodwill.BID_HIGH_BIDDER:
+            self.logger.warning(
+                f"Bid {max_bid:.2f} placed on '{title}' - you are the high bidder",
+                extra=self.notify_extra("Bid placed: high bidder", item_id, priority=4),
+            )
+        elif outcome == shopgoodwill.Shopgoodwill.BID_OUTBID:
+            self.logger.warning(
+                f"Bid {max_bid:.2f} placed on '{title}' - already outbid "
+                "(someone else has a higher max)",
+                extra=self.notify_extra("Bid placed: outbid", item_id, priority=4),
+            )
+        elif outcome == shopgoodwill.Shopgoodwill.BID_CLOSED:
+            self.logger.error(
+                f"Bid on '{title}' rejected - auction already closed: {result['message']}",
+                extra=self.notify_extra("Bid too late", item_id, priority=5),
+            )
+            return None
+        else:
+            self.logger.warning(
+                f"Bid {max_bid:.2f} placed on '{title}' - unrecognized response: "
+                f"{result['message'] or result['raw']}",
+                extra=self.notify_extra("Bid placed: check result", item_id, priority=4),
+            )
+
+        # check whether we won once the auction has had time to close
+        asyncio.get_running_loop().create_task(
+            self.check_result(item_id, title, max_bid)
+        ).add_done_callback(self.task_err_handler)
+
+        return None
+
+    async def check_result(
+        self, item_id: int, title: str, max_bid: float, attempts: int = 3
+    ) -> None:
+        """
+        After a real bid, wait for the auction to close and report
+        whether the logged-in bidding account won, and at what price.
+
+        :param item_id: A valid ShopGoodwill item ID
+        :param title: The item title, for messages
+        :param max_bid: The max bid that was placed
+        :param attempts: How many times to check (60s apart) for the close
+        :rtype: None
+        """
+
+        for _ in range(attempts):
+            await asyncio.sleep(self.result_check_delay_seconds)
             try:
-                self.bid_shopgoodwill_client.place_bid(
-                    item_id, max_bid, favorite["sellerId"], quantity=1
-                )
-            except HTTPError as he:
+                info = self.bid_shopgoodwill_client.get_item_info(item_id)
+            except BaseException as be:
                 self.logger.error(
-                    f"HTTPError placing bid on '{favorite['title']}' - {he}"
+                    f"{type(be).__name__} checking result for '{title}' - {be}"
                 )
-                return None
+                continue
 
-        # only log the message after we've already placed the bid
-        self.logger.warning(
-            f"{self.dry_run_msg}Placing bid on '{favorite['title']}' for {max_bid}"
-        )
+            history = info.get("bidHistory") or {}
+            if not history.get("auctionClosed"):
+                continue
 
+            summary = history.get("bidSummary") or []
+            price = history.get("itemCurrentPrice", info.get("currentPrice"))
+            if summary and summary[0].get("isLoggedInBuyer"):
+                self.logger.warning(
+                    f"WON '{title}' for {float(price):.2f} (your max was {max_bid:.2f})",
+                    extra=self.notify_extra("You won", item_id, priority=4),
+                )
+            else:
+                self.logger.warning(
+                    f"Lost '{title}' - sold for {float(price):.2f} "
+                    f"(your max was {max_bid:.2f})",
+                    extra=self.notify_extra("Auction lost", item_id, priority=3),
+                )
+            return None
+
+        self.logger.warning(f"Could not confirm the result for '{title}' - check the site")
         return None
 
     def start(self) -> None:

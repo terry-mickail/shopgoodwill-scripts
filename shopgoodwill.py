@@ -444,6 +444,8 @@ class Shopgoodwill:
             f"{Shopgoodwill.API_ROOT}/ItemBid/PlaceBid", json=bid_json
         ).json()
 
+        return Shopgoodwill.classify_bid_response(bid_res)
+
         """
         Possible bid responses:
 
@@ -460,8 +462,42 @@ class Shopgoodwill:
             status: false
         """
 
-        # TODO should we return the outcome?
-        return
+    BID_HIGH_BIDDER = "high_bidder"
+    BID_OUTBID = "outbid"
+    BID_CLOSED = "closed"
+    BID_UNKNOWN = "unknown"
+
+    @staticmethod
+    def classify_bid_response(bid_res: Dict) -> Dict:
+        """
+        Turn a PlaceBid response into an outcome.
+        The response's "message" is HTML; the known variants are documented
+        in place_bid. Anything unrecognized is returned as BID_UNKNOWN
+        with the message text so it can be logged and added here later.
+
+        :param bid_res: The parsed JSON response from PlaceBid
+        :type bid_res: Dict
+        :return: {"outcome": one of the BID_* constants,
+            "message": the response message as plain text,
+            "raw": the response}
+        :rtype: Dict
+        """
+
+        message_html = (bid_res or {}).get("message") or ""
+        message = re.sub(r"<[^>]+>", " ", message_html)
+        message = re.sub(r"\s+", " ", message).strip()
+        lowered = message.lower()
+
+        if "already been outbid" in lowered:
+            outcome = Shopgoodwill.BID_OUTBID
+        elif "high bidder" in lowered:
+            outcome = Shopgoodwill.BID_HIGH_BIDDER
+        elif "auction has closed" in lowered or (bid_res or {}).get("result") == -3:
+            outcome = Shopgoodwill.BID_CLOSED
+        else:
+            outcome = Shopgoodwill.BID_UNKNOWN
+
+        return {"outcome": outcome, "message": message, "raw": bid_res}
 
     def get_item_info(self, item_id: int) -> Dict:
         """
