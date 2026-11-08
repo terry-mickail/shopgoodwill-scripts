@@ -190,6 +190,28 @@ class Shopgoodwill:
             .astimezone(ZoneInfo("Etc/UTC"))
         )
 
+    @staticmethod
+    def parse_timestamp_precise(sgw_timestamp: str) -> datetime.datetime:
+        """
+        Like convert_timestamp_to_datetime, but keeps fractional seconds.
+        SGW timestamps are naive Pacific time with 0 to 7 fractional digits
+        (eg. '2026-11-07T20:16:24.61'), so pad/trim to microseconds by hand
+        rather than relying on fromisoformat's fraction handling.
+
+        :param sgw_timestamp: A string timestamp from SGW
+        :type sgw_timestamp: str
+        :return: A timezone-aware (UTC) datetime
+        :rtype: datetime.datetime
+        """
+
+        whole, _, fraction = sgw_timestamp.partition(".")
+        microseconds = int((fraction + "000000")[:6]) if fraction else 0
+        return (
+            datetime.datetime.strptime(whole, "%Y-%m-%dT%H:%M:%S")
+            .replace(microsecond=microseconds, tzinfo=ZoneInfo("America/Los_Angeles"))
+            .astimezone(ZoneInfo("Etc/UTC"))
+        )
+
     def _encrypt_login_value(self, plaintext: str) -> str:
         """
         Replicates SGW's "encryption" on username/password fields.

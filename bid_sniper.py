@@ -9,7 +9,7 @@ import logging.config
 import queue
 from json.decoder import JSONDecodeError
 from logging.handlers import QueueHandler, QueueListener
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import parsedatetime
@@ -159,7 +159,7 @@ class BidSniper:
 
         # bid placing setup
         bid_time_delta_str = self.config["bid_sniper"].get(
-            "bid_snipe_time_delta", "30 seconds"
+            "bid_snipe_time_delta", "5 seconds"
         )
         self.bid_time_delta = (
             cal.parseDT(bid_time_delta_str, sourceTime=datetime.datetime.min)[0]
@@ -167,6 +167,13 @@ class BidSniper:
         )
         if self.bid_time_delta == datetime.timedelta(0):
             self.logger.warning("Invalid time delta string '{time_delta_str}'")
+
+        # The pre-bid check (refresh favorites, fetch item details,
+        # measure the server clock offset) runs this long before the bid
+        # fires, so that the only request made at fire time is the bid itself
+        self.bid_preflight_delta = datetime.timedelta(
+            seconds=float(self.config["bid_sniper"].get("bid_preflight_seconds", 20))
+        )
 
         self.favorites_cache = {
             "last_updated": datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc),
@@ -277,16 +284,54 @@ class BidSniper:
 
         return None
 
-    async def place_bid(self, item_id: int) -> None:
+    def fetch_item_info_timed(
+        self, item_id: int
+    ) -> Tuple[Dict, datetime.timedelta, datetime.timedelta]:
         """
-        Given an item ID, do the following:
-            Check if it's still in our favorites
-            If it is, see if we've set a max bid amount for it
-            If our max bid amount is greater than the current price,
-                place a bid for that amount
+        Fetch item details and estimate the offset between
+        the server clock and the local clock.
+
+        The server's serverTime is assumed to have been stamped
+        at the midpoint of the request's round trip,
+        so the estimate is accurate to within half the round trip time.
 
         :param item_id: A valid ShopGoodwill item ID
         :type item_id: int
+        :return: (item_info, clock_offset, round_trip_time), where
+            clock_offset = server clock minus local clock
+        :rtype: Tuple[Dict, datetime.timedelta, datetime.timedelta]
+        """
+
+        sent = datetime.datetime.now(datetime.timezone.utc)
+        item_info = self.shopgoodwill_client.get_item_info(item_id)
+        received = datetime.datetime.now(datetime.timezone.utc)
+
+        rtt = received - sent
+        server_now = shopgoodwill.Shopgoodwill.parse_timestamp_precise(
+            item_info["serverTime"]
+        )
+        clock_offset = server_now - (sent + rtt / 2)
+
+        return item_info, clock_offset, rtt
+
+    async def place_bid(
+        self, item_id: int, fallback_end_time: datetime.datetime
+    ) -> None:
+        """
+        Called bid_preflight_seconds before the bid should fire.
+        Given an item ID, do the following:
+            Check if it's still in our favorites
+            If it is, see if we've set a max bid amount for it
+            Fetch item details, sync to the server clock,
+                and run the friend_list check
+            Sleep until bid_snipe_time_delta before the server's end time
+            Place a bid for the max bid amount
+
+        :param item_id: A valid ShopGoodwill item ID
+        :type item_id: int
+        :param fallback_end_time: The end time from the favorites list,
+            used with the local clock if item details can't be fetched
+        :type fallback_end_time: datetime.datetime
         :rtype: None
         """
 
@@ -322,27 +367,51 @@ class BidSniper:
             self.logger.error(f"ValueError casting max_bid value '{max_bid}' as float")
             return None
 
-        # if we want to use the friend_list feature,
-        # we must get the highest bidder before placing a bid
-        if self.config.get("friend_list", list()):
+        # Fetch item details once, now (during the preflight window):
+        # it gives us the server clock, the authoritative end time,
+        # and the bid history for the friend_list check.
+        #
+        # If this fails, fall back to the favorites end time and the local clock
+        # rather than skipping the bid.
+        fire_at = None
+        try:
+            item_info, clock_offset, rtt = self.fetch_item_info_timed(item_id)
+            server_end_time = shopgoodwill.Shopgoodwill.parse_timestamp_precise(
+                item_info["endTime"]
+            )
+            # convert the server's end time into local-clock terms
+            local_end_time = server_end_time - clock_offset
+            fire_at = local_end_time - self.bid_time_delta
+            self.logger.info(
+                f"Clock sync for '{favorite['title']}' - local clock is "
+                f"{-clock_offset.total_seconds():+.3f}s vs server "
+                f"(round trip {rtt.total_seconds() * 1000:.0f}ms), "
+                f"bid fires {self.bid_time_delta.total_seconds():g}s before end"
+            )
 
-            # attempt to get item info, but continue to place bid if we can't
-            try:
-                item_info = self.shopgoodwill_client.get_item_info(item_id)
-                # Don't bid if the current highest bidder is on our friend list
+            # if we want to use the friend_list feature,
+            # don't bid if the current highest bidder is on our friend list
+            if self.config.get("friend_list", list()):
                 bid_summary = item_info["bidHistory"].get("bidSummary", list())
                 if bid_summary:
                     bidder_name = bid_summary[0]["bidderName"]
                     if bidder_name in self.config.get("friend_list", list()):
                         self.logger.info(
-                            "Canceling bid due to friendship for item '{favorite['title']}' - current high bidder {bidder_name}"
+                            f"Canceling bid due to friendship for item '{favorite['title']}' - current high bidder {bidder_name}"
                         )
                         return None
 
-            except BaseException as be:
-                self.logger.error(
-                    f"{type(be).__name__} getting info for item ID '{item_id} - {be} - continuing"
-                )
+        except BaseException as be:
+            self.logger.error(
+                f"{type(be).__name__} getting info for item ID '{item_id}' - {be} - "
+                "continuing with local clock"
+            )
+            fire_at = fallback_end_time - self.bid_time_delta
+
+        # Wait for the precise moment, then place the bid
+        delay = (fire_at - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
 
         # Finally place a bid
         if not self.dry_run:
@@ -386,7 +455,8 @@ class BidSniper:
         # sort all tasks to schedule (time alerts and bid placing) from "soonest" to "futhest"
         # once sorted, use the "soonest" delta to determine when to schedule events
         min_scheduling_timedelta = sorted(
-            self.alert_time_deltas + [self.bid_time_delta]
+            self.alert_time_deltas
+            + [self.bid_time_delta + self.bid_preflight_delta]
         )[::-1][0]
 
         while True:
@@ -439,10 +509,11 @@ class BidSniper:
                         ).add_done_callback(self.task_err_handler)
 
                     # schedule a tentative max_bid for this item
+                    # (place_bid itself sleeps until the precise fire time)
                     self.event_loop.create_task(
                         self.schedule_task(
-                            self.place_bid(item_id),
-                            end_time - self.bid_time_delta,
+                            self.place_bid(item_id, end_time),
+                            end_time - self.bid_time_delta - self.bid_preflight_delta,
                             [self.task_err_handler],
                         )
                     ).add_done_callback(self.task_err_handler)

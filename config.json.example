@@ -34,7 +34,8 @@
     },
     "bid_sniper": {
         "refresh_seconds": 300,
-        "bid_snipe_time_delta": "30 seconds",
+        "bid_snipe_time_delta": "5 seconds",
+        "bid_preflight_seconds": 20,
         "favorites_max_cache_seconds": 60,
         "friend_list": [],
         "alert_time_deltas": [
