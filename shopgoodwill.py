@@ -1,5 +1,6 @@
 import base64
 import datetime
+import logging
 import re
 import urllib.parse
 from copy import deepcopy
@@ -20,6 +21,8 @@ _SHIPPING_COST_PATTERN = re.compile(
 )
 _SGW_BUYERAPI_DOMAIN = "buyerapi.shopgoodwill.com"
 
+logger = logging.getLogger("shopgoodwill")
+
 
 class IgnoreBuyerApiCookieJar(RequestsCookieJar):
     def set_cookie(self, cookie, *args, **kwargs):
@@ -28,6 +31,45 @@ class IgnoreBuyerApiCookieJar(RequestsCookieJar):
             return
 
         super().set_cookie(cookie, *args, **kwargs)
+
+
+class ReauthSession(requests.Session):
+    """
+    A requests.Session that, when a request fails with HTTP 401,
+    calls reauth_callback (which should log in again) and retries
+    the request exactly once.
+
+    The access token issued at login expires, and bid_sniper.py runs
+    as a long-lived daemon, so without this the first request after
+    expiry (possibly the bid itself) would fail.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reauth_callback = None
+        self._reauthing = False
+
+    def request(self, method, url, *args, **kwargs):
+        try:
+            return super().request(method, url, *args, **kwargs)
+
+        except HTTPError as he:
+            if (
+                he.response is None
+                or he.response.status_code != 401
+                or self.reauth_callback is None
+                or self._reauthing
+            ):
+                raise
+
+            logger.warning(f"HTTP 401 from {url} - logging in again and retrying")
+            self._reauthing = True
+            try:
+                self.reauth_callback()
+            finally:
+                self._reauthing = False
+
+            return super().request(method, url, *args, **kwargs)
 
 
 class Shopgoodwill:
@@ -66,7 +108,7 @@ class Shopgoodwill:
         # eg. profile info
 
     def __init__(self, auth_info: Optional[Dict] = None):
-        self.shopgoodwill_session = requests.Session()
+        self.shopgoodwill_session = ReauthSession()
         self.shopgoodwill_session.cookies = IgnoreBuyerApiCookieJar()
 
         # SGW doesn't take kindly to the default requests user-agent
@@ -103,6 +145,26 @@ class Shopgoodwill:
                     raise Exception("Invalid auth_info provided!")
 
             self.logged_in = True
+
+            # remember how to log in again, so expired tokens can be renewed
+            # (only possible if credentials were supplied, not just a token)
+            if auth_info.get("encrypted_username") and auth_info.get(
+                "encrypted_password"
+            ):
+                self._login_values = (
+                    auth_info["encrypted_username"],
+                    auth_info["encrypted_password"],
+                )
+            elif auth_info.get("username") and auth_info.get("password"):
+                self._login_values = (
+                    self._encrypt_login_value(auth_info["username"]),
+                    self._encrypt_login_value(auth_info["password"]),
+                )
+            else:
+                self._login_values = None
+
+            if self._login_values:
+                self.shopgoodwill_session.reauth_callback = self.relogin
 
     def convert_timestamp_to_datetime(self, sgw_timestamp: str) -> datetime.datetime:
         """
@@ -198,6 +260,16 @@ class Shopgoodwill:
 
         return inner
 
+    def relogin(self) -> None:
+        """
+        Log in again with the stored credentials,
+        replacing the (presumably expired) access token
+        """
+
+        self.shopgoodwill_session.headers.pop("Authorization", None)
+        self.login(*self._login_values)
+        logger.warning("Logged in to ShopGoodwill again with a fresh access token")
+
     def login(self, username: str, password: str):
         # I don't know how they set clientIpAddress or appVersion,
         # I just nabbed these from my browsers' requests
@@ -211,13 +283,18 @@ class Shopgoodwill:
         }
 
         # Temporarily drop the requests hook
-        # so we can add the set-cookies from this HTML page
+        # so we can add the set-cookies from this HTML page.
+        # Restore whatever hook was installed afterwards
+        # (bid_sniper.py installs its own outage-tracking hook,
+        # which must survive a re-login).
+        previous_hooks = self.shopgoodwill_session.hooks["response"]
         self.shopgoodwill_session.hooks["response"] = None
 
         # TODO we should still check for exceptions here
-        self.shopgoodwill_session.get(Shopgoodwill.LOGIN_PAGE_URL)
-
-        self.shopgoodwill_session.hooks["response"] = self.shopgoodwill_err_hook
+        try:
+            self.shopgoodwill_session.get(Shopgoodwill.LOGIN_PAGE_URL)
+        finally:
+            self.shopgoodwill_session.hooks["response"] = previous_hooks
 
         res_json = self.shopgoodwill_session.post(
             Shopgoodwill.API_ROOT + "/SignIn/Login", json=login_params
