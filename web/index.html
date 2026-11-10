@@ -116,6 +116,8 @@
         <div class="grid">
           <label for="sSnipe">Bid this many seconds before the end</label>
           <div><input type="number" id="sSnipe" min="1" max="120" step="0.5" class="money"> <span class="hint">5 is a good default; your clock offset is corrected automatically</span></div>
+          <label for="sTie">Tie-breaker</label>
+          <div>$ <input type="number" id="sTie" min="0" max="5" step="0.01" class="money"> <span class="hint">added on top of every max, so you beat anyone who picked the same number (a tie goes to the earlier bid). You may pay up to this much over your max. Odd cents like 0.37 work well.</span></div>
           <label for="sAlerts">Alert times</label>
           <div><input type="text" id="sAlerts" style="width:320px"> <span class="hint">comma separated, e.g. 1 hour, 10 minutes, 1 minute</span></div>
           <label>"Contested" means</label>
@@ -218,7 +220,8 @@ function updateRow(tr, item) {
   else if (item.label) { chip.className = "chip " + item.label; chip.textContent = item.label; }
   else { chip.className = ""; chip.textContent = ""; }
   let d = item.detail || "";
-  if (item.max_bid && item.pct_of_max !== null && item.pct_of_max !== undefined && !item.priced_out) d += (d ? " | " : "") + item.pct_of_max + "% of your max";
+  if (item.max_bid && item.bid_amount && item.bid_amount > item.max_bid) d = `bids ${money(item.bid_amount)} with tie-breaker` + (d ? " | " + d : "");
+  if (item.max_bid && item.pct_of_max !== null && item.pct_of_max !== undefined && !item.priced_out) d += (d ? " | " : "") + item.pct_of_max + "% of your bid";
   if (!item.max_bid) d += (d ? " | " : "") + "alerts only, no bid";
   detail.textContent = d;
   const al = tr.querySelector(".alerts");
@@ -294,6 +297,7 @@ function render(s) {
 
 function fillSettings(st) {
   $("sSnipe").value = st.snipe_seconds;
+  $("sTie").value = Number(st.tie_breaker || 0).toFixed(2);
   $("sAlerts").value = st.alert_times.join(", ");
   $("sMinBids").value = st.contest_min_bids;
   $("sMinBidders").value = st.contest_min_bidders;
@@ -333,6 +337,7 @@ $("settingsForm").addEventListener("submit", async (ev) => {
   try {
     const r = await api("/api/settings", {
       snipe_seconds: Number($("sSnipe").value),
+      tie_breaker: Number($("sTie").value || 0),
       alert_times: $("sAlerts").value.split(","),
       contest_min_bids: Number($("sMinBids").value),
       contest_min_bidders: Number($("sMinBidders").value),

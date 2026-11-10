@@ -220,6 +220,7 @@ class SniperApp:
         return {
             "snipe_seconds": self.sniper.bid_time_delta.total_seconds(),
             "alert_times": conf.get("alert_time_deltas", []),
+            "tie_breaker": self.sniper.tie_breaker(),
             "contest_window_minutes": float(conf.get("contest_window_minutes", 30)),
             "contest_min_bids": int(conf.get("contest_min_bids", 3)),
             "contest_min_bidders": int(conf.get("contest_min_bidders", 2)),
@@ -258,10 +259,14 @@ class SniperApp:
             if tracked:
                 try:
                     info = self.get_item(item_id, end_utc)
-                    status = watchlist.contest_status(
-                        info, max_bid=tracked["max_bid"], **contest_conf
+                    bid = (
+                        self.sniper.bid_amount(tracked["max_bid"])
+                        if tracked["max_bid"]
+                        else None
                     )
+                    status = watchlist.contest_status(info, max_bid=bid, **contest_conf)
                     row.update(status)
+                    row["bid_amount"] = bid
                     row["end_utc"] = shopgoodwill.Shopgoodwill.parse_timestamp_precise(
                         info["endTime"]
                     ).isoformat()
@@ -392,6 +397,11 @@ def create_app(sniper_app: SniperApp) -> Flask:
             if topic and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
                 raise ValueError("ntfy topic may only use letters, numbers, - and _")
             server = str(body.get("ntfy_server") or notify.DEFAULT_NTFY_SERVER).strip()
+            tie_breaker = round(float(body.get("tie_breaker", 0) or 0), 2)
+            if not (0 <= tie_breaker <= sa.sniper.MAX_TIE_BREAKER):
+                raise ValueError(
+                    f"Tie-breaker must be between $0 and ${sa.sniper.MAX_TIE_BREAKER:.0f}"
+                )
             if not server.startswith("https://"):
                 raise ValueError("ntfy server must start with https://")
         except (KeyError, TypeError) as e:
@@ -406,6 +416,7 @@ def create_app(sniper_app: SniperApp) -> Flask:
             conf["contest_window_minutes"] = window
             conf["contest_min_bids"] = min_bids
             conf["contest_min_bidders"] = min_bidders
+            conf["tie_breaker"] = tie_breaker
             notes = sa.config.setdefault("notifications", {})
             notes["ntfy_server"] = server
             notes["ntfy_topic"] = topic

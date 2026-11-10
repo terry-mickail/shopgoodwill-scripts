@@ -147,20 +147,31 @@ def contest_status(
     }
 
 
-def describe(status: Dict, max_bid: Optional[float]) -> str:
+def describe(status: Dict, bid: Optional[float], max_bid: Optional[float] = None) -> str:
     """
     One-line human summary used in alerts, eg.
     "Contested: 4 bid(s) from 3 bidder(s) in the last 30 min | $7.99 (min $8.99), your max $9.00 (89%)"
+
+    bid is the amount that will actually be bid (max plus any tie-breaker), and is
+    what status was computed against. Pass max_bid when they differ, so the text
+    shows both: "your bid $9.37 (max $9.00 + $0.37)".
     """
+
+    if bid and max_bid and round(bid - max_bid, 2) > 0:
+        label = f"your bid ${bid:.2f} (max ${max_bid:.2f} + ${bid - max_bid:.2f})"
+    elif bid:
+        label = f"your max ${bid:.2f}"
+    else:
+        label = None
 
     price = f"${status['current_price']:.2f}"
     if status["minimum_bid"] is not None:
         price += f" (min ${status['minimum_bid']:.2f})"
-    if max_bid:
+    if label:
         if status["priced_out"]:
-            price += f", PRICED OUT of your max ${max_bid:.2f}"
+            price += f", PRICED OUT of {label}"
         else:
-            price += f", your max ${max_bid:.2f} ({status['pct_of_max']}%)"
+            price += f", {label} ({status['pct_of_max']}%)"
     else:
         price += ", no max set (alert only)"
     return f"{status['label']}: {status['detail']} | {price}"

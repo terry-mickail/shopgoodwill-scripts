@@ -128,3 +128,14 @@ def test_add_retries_once_on_403(client, monkeypatch):
     monkeypatch.setattr(sa.client, "get_item_info", flaky)
     r = c.post("/api/items", json={"item": "222333444", "max_bid": 5})
     assert r.get_json()["ok"] and calls["n"] == 2
+
+def test_tie_breaker_setting(client):
+    c, sa, notes, path = client
+    base = {"snipe_seconds": 5, "alert_times": ["1 hour"], "contest_window_minutes": 30,
+            "contest_min_bids": 3, "contest_min_bidders": 2, "ntfy_topic": "", "ntfy_server": "https://ntfy.sh", "windows_toast": False}
+    assert c.post("/api/settings", json=dict(base, tie_breaker=37)).status_code == 400
+    assert c.post("/api/settings", json=dict(base, tie_breaker=-1)).status_code == 400
+    r = c.post("/api/settings", json=dict(base, tie_breaker=0.37)).get_json()
+    assert r["ok"] and r["settings"]["tie_breaker"] == 0.37 and json.loads(path.read_text())["bid_sniper"]["tie_breaker"] == 0.37
+    item = c.get("/api/state").get_json()["items"][0]
+    assert item["max_bid"] == 9.0 and item["bid_amount"] == 9.37

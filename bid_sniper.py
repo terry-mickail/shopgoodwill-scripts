@@ -314,10 +314,13 @@ class BidSniper:
         # add the contest label and price vs max, if item details are available
         try:
             item_info = self.shopgoodwill_client.get_item_info(item_id)
+            bid = self.bid_amount(tracked["max_bid"]) if tracked["max_bid"] else None
             status = watchlist.contest_status(
-                item_info, max_bid=tracked["max_bid"], **self.contest_settings()
+                item_info, max_bid=bid, **self.contest_settings()
             )
-            message += " | " + watchlist.describe(status, tracked["max_bid"])
+            message += " | " + watchlist.describe(
+                status, bid, max_bid=tracked["max_bid"]
+            )
         except BaseException as be:
             self.logger.warning(
                 f"Couldn't get item details for the time alert - {shopgoodwill.describe_error(be)}"
@@ -328,6 +331,29 @@ class BidSniper:
             extra=self.notify_extra(f"Ending in {delta_until_end}", item_id, priority=3),
         )
         return None
+
+    MAX_TIE_BREAKER = 5.0
+
+    def tie_breaker(self) -> float:
+        """
+        Dollars added on top of every max bid, so a bid beats anyone else who
+        chose the same round number (on a tie, the earlier bid wins).
+        Read live from config so a change in the web UI applies to the next bid.
+        Capped at MAX_TIE_BREAKER: a typo like 37 for 0.37 must not raise every bid by $37.
+        """
+
+        try:
+            extra = float(self.config["bid_sniper"].get("tie_breaker", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return round(min(max(extra, 0.0), self.MAX_TIE_BREAKER), 2)
+
+    def bid_amount(self, max_bid: float) -> float:
+        """
+        What actually gets bid: the max plus the tie-breaker
+        """
+
+        return round(max_bid + self.tie_breaker(), 2)
 
     def contest_settings(self) -> Dict:
         """
@@ -388,6 +414,12 @@ class BidSniper:
         if not tracked or not tracked["max_bid"]:
             return None
         max_bid = tracked["max_bid"]
+        bid = self.bid_amount(max_bid)
+        bid_text = (
+            f"{bid:.2f} (max {max_bid:.2f} + tie-breaker {bid - max_bid:.2f})"
+            if bid != max_bid
+            else f"{bid:.2f}"
+        )
 
         # Fetch item details once, now (during the preflight window):
         # it gives us the server clock, the authoritative end time,
@@ -416,10 +448,10 @@ class BidSniper:
             # Don't send a bid that's sure to be rejected:
             # minimumBid is the lowest amount SGW will accept right now
             minimum_bid = item_info.get("minimumBid", None)
-            if minimum_bid is not None and float(minimum_bid) > max_bid:
+            if minimum_bid is not None and float(minimum_bid) > bid:
                 self.logger.warning(
                     f"Priced out of '{favorite['title']}' - minimum bid is "
-                    f"{float(minimum_bid):.2f}, your max is {max_bid:.2f}. Not bidding."
+                    f"{float(minimum_bid):.2f}, your bid would be {bid_text}. Not bidding."
                 )
                 return None
 
@@ -451,7 +483,7 @@ class BidSniper:
         title = favorite["title"]
         if self.dry_run:
             self.logger.warning(
-                f"{self.dry_run_msg}Placing bid on '{title}' for {max_bid}",
+                f"{self.dry_run_msg}Placing bid on '{title}' for {bid_text}",
                 extra=self.notify_extra("Dry-run bid", item_id, priority=3),
             )
             return None
@@ -464,7 +496,7 @@ class BidSniper:
         for attempt in (1, 2):
             try:
                 result = self.bid_shopgoodwill_client.place_bid(
-                    item_id, max_bid, favorite["sellerId"], quantity=1
+                    item_id, bid, favorite["sellerId"], quantity=1
                 )
                 break
             except HTTPError as he:
@@ -488,12 +520,12 @@ class BidSniper:
         outcome = result["outcome"]
         if outcome == shopgoodwill.Shopgoodwill.BID_HIGH_BIDDER:
             self.logger.warning(
-                f"Bid {max_bid:.2f} placed on '{title}' - you are the high bidder",
+                f"Bid {bid_text} placed on '{title}' - you are the high bidder",
                 extra=self.notify_extra("Bid placed: high bidder", item_id, priority=4),
             )
         elif outcome == shopgoodwill.Shopgoodwill.BID_OUTBID:
             self.logger.warning(
-                f"Bid {max_bid:.2f} placed on '{title}' - already outbid "
+                f"Bid {bid_text} placed on '{title}' - already outbid "
                 "(someone else has a higher max)",
                 extra=self.notify_extra("Bid placed: outbid", item_id, priority=4),
             )
@@ -505,14 +537,14 @@ class BidSniper:
             return None
         else:
             self.logger.warning(
-                f"Bid {max_bid:.2f} placed on '{title}' - unrecognized response: "
+                f"Bid {bid_text} placed on '{title}' - unrecognized response: "
                 f"{result['message'] or result['raw']}",
                 extra=self.notify_extra("Bid placed: check result", item_id, priority=4),
             )
 
         # check whether we won once the auction has had time to close
         asyncio.get_running_loop().create_task(
-            self.check_result(item_id, title, max_bid)
+            self.check_result(item_id, title, bid)
         ).add_done_callback(self.task_err_handler)
 
         return None
@@ -549,13 +581,13 @@ class BidSniper:
             price = history.get("itemCurrentPrice", info.get("currentPrice"))
             if summary and summary[0].get("isLoggedInBuyer"):
                 self.logger.warning(
-                    f"WON '{title}' for {float(price):.2f} (your max was {max_bid:.2f})",
+                    f"WON '{title}' for {float(price):.2f} (your bid was {max_bid:.2f})",
                     extra=self.notify_extra("You won", item_id, priority=4),
                 )
             else:
                 self.logger.warning(
                     f"Lost '{title}' - sold for {float(price):.2f} "
-                    f"(your max was {max_bid:.2f})",
+                    f"(your bid was {max_bid:.2f})",
                     extra=self.notify_extra("Auction lost", item_id, priority=3),
                 )
             return None
