@@ -82,3 +82,20 @@ def no_real_network(monkeypatch):
 
     monkeypatch.setattr(socket, "create_connection", guarded_create)
     yield
+
+
+@pytest.fixture(autouse=True)
+def no_real_toasts(monkeypatch):
+    """
+    Tests must never show real Windows notifications either (one did, on Windows).
+    Record them instead; tests that care can read TOASTS.
+    """
+
+    import notify
+
+    TOASTS.clear()
+    monkeypatch.setattr(notify, "send_windows_toast", lambda title, message, timeout=15: TOASTS.append((title, message)))
+    yield
+
+
+TOASTS = []

@@ -24,8 +24,13 @@ def test_handler_filters_and_never_raises():
         assert len(r.calls) == 2  # the flagged warning and the error, both 500s, no exception
         assert r.calls[0].request.headers["X-Title"] == "Bid"
 
-def test_deliver_reports_off_channels():
+def test_deliver_reports_off_channels(monkeypatch):
+    import conftest
     res = notify.deliver({"ntfy_topic": "", "windows_toast": False}, "t", "m")
     assert res == {"ntfy": "off", "windows": "off"}
+    monkeypatch.setattr(notify.sys, "platform", "linux")
     res = notify.deliver({"ntfy_topic": "", "windows_toast": True}, "t", "m")
-    assert res["windows"] == "not on Windows"
+    assert res["windows"] == "not on Windows" and conftest.TOASTS == []
+    monkeypatch.setattr(notify.sys, "platform", "win32")
+    res = notify.deliver({"ntfy_topic": "", "windows_toast": True}, "Ending soon", "Fossil watch")
+    assert res["windows"] == "sent" and conftest.TOASTS == [("Ending soon", "Fossil watch")]
