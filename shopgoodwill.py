@@ -71,6 +71,23 @@ def describe_error(err: BaseException) -> str:
     return f"{method} {url} -> " + " | ".join(parts)
 
 
+# Statuses worth one retry: refused/limited (403, 429) and gateway hiccups (502-504)
+TRANSIENT_STATUSES = frozenset({403, 429, 502, 503, 504})
+
+
+def is_transient(err: BaseException) -> bool:
+    """
+    True if a failed request is the kind that often succeeds a moment later
+    """
+
+    response = getattr(err, "response", None)
+    return (
+        isinstance(err, HTTPError)
+        and response is not None
+        and response.status_code in TRANSIENT_STATUSES
+    )
+
+
 class ReauthSession(requests.Session):
     """
     A requests.Session that, when a request fails with HTTP 401,

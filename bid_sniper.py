@@ -396,6 +396,7 @@ class BidSniper:
         # If this fails, fall back to the favorites end time and the local clock
         # rather than skipping the bid.
         fire_at = None
+        end_local = fallback_end_time
         try:
             item_info, clock_offset, rtt = self.fetch_item_info_timed(item_id)
             server_end_time = shopgoodwill.Shopgoodwill.parse_timestamp_precise(
@@ -404,6 +405,7 @@ class BidSniper:
             # convert the server's end time into local-clock terms
             local_end_time = server_end_time - clock_offset
             fire_at = local_end_time - self.bid_time_delta
+            end_local = local_end_time
             self.logger.info(
                 f"Clock sync for '{favorite['title']}' - local clock is "
                 f"{-clock_offset.total_seconds():+.3f}s vs server "
@@ -458,16 +460,30 @@ class BidSniper:
         # I don't think they use it in auctions
         #
         # Note that the account used is bidding_shopgoodwill_client
-        try:
-            result = self.bid_shopgoodwill_client.place_bid(
-                item_id, max_bid, favorite["sellerId"], quantity=1
-            )
-        except HTTPError as he:
-            self.logger.error(
-                f"Bid on '{title}' FAILED - {shopgoodwill.describe_error(he)}",
-                extra=self.notify_extra("Bid FAILED", item_id, priority=5),
-            )
-            return None
+        result = None
+        for attempt in (1, 2):
+            try:
+                result = self.bid_shopgoodwill_client.place_bid(
+                    item_id, max_bid, favorite["sellerId"], quantity=1
+                )
+                break
+            except HTTPError as he:
+                seconds_left = (
+                    end_local - datetime.datetime.now(datetime.timezone.utc)
+                ).total_seconds()
+                # one retry for a temporary failure, only while the auction is still open
+                if attempt == 1 and shopgoodwill.is_transient(he) and seconds_left > 1.0:
+                    self.logger.warning(
+                        f"Bid on '{title}' got a temporary failure, retrying once "
+                        f"({seconds_left:.1f}s left) - {shopgoodwill.describe_error(he)}"
+                    )
+                    await asyncio.sleep(0.25)
+                    continue
+                self.logger.error(
+                    f"Bid on '{title}' FAILED - {shopgoodwill.describe_error(he)}",
+                    extra=self.notify_extra("Bid FAILED", item_id, priority=5),
+                )
+                return None
 
         outcome = result["outcome"]
         if outcome == shopgoodwill.Shopgoodwill.BID_HIGH_BIDDER:

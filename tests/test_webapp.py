@@ -110,3 +110,21 @@ def test_http_errors_logged_once_with_evidence(client):
         sa.log_http_error("load item 9", err)
     lines = [e["message"] for e in sa.ring.recent() if "Couldn't load item 9" in e["message"]]
     assert len(lines) == 1 and "HTTP 403 Forbidden" in lines[0] and "retry-after=60" in lines[0]
+
+def test_add_retries_once_on_403(client, monkeypatch):
+    c, sa, notes, _ = client
+    import webapp as wa
+    monkeypatch.setattr(wa.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+    real = sa.client.get_item_info
+    def flaky(item_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            import requests
+            from requests.exceptions import HTTPError
+            r = requests.models.Response(); r.status_code = 403; r.url = "https://x"; r._content = b""
+            raise HTTPError(response=r)
+        return real(item_id)
+    monkeypatch.setattr(sa.client, "get_item_info", flaky)
+    r = c.post("/api/items", json={"item": "222333444", "max_bid": 5})
+    assert r.get_json()["ok"] and calls["n"] == 2

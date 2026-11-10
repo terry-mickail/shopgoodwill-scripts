@@ -68,6 +68,22 @@ class RingBufferHandler(logging.Handler):
             return list(self.records)[::-1]
 
 
+def with_one_retry(fn, *args, delay: float = 2.0, **kwargs):
+    """
+    Call fn; if it fails with a temporary HTTP error (see shopgoodwill.is_transient),
+    wait `delay` seconds and call it once more. Any other failure, or a second
+    failure, is raised.
+    """
+
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        if not shopgoodwill.is_transient(e):
+            raise
+        time.sleep(delay)
+        return fn(*args, **kwargs)
+
+
 def parse_item_id(text: str) -> Optional[int]:
     """
     Accept a ShopGoodwill item URL or a bare item number
@@ -305,7 +321,7 @@ def create_app(sniper_app: SniperApp) -> Flask:
         alerts = bool(body.get("alerts", True))
 
         try:
-            info = sa.client.get_item_info(item_id)
+            info = with_one_retry(sa.client.get_item_info, item_id)
         except Exception as e:
             sa.log_http_error(f"load item {item_id}", e)
             return bad(f"Couldn't load item {item_id}: {shopgoodwill.describe_error(e)}")
@@ -317,7 +333,7 @@ def create_app(sniper_app: SniperApp) -> Flask:
             return bad("That auction has already ended")
 
         try:
-            sa.client.add_favorite(item_id, note=watchlist.make_note(max_bid, alerts))
+            with_one_retry(sa.client.add_favorite, item_id, note=watchlist.make_note(max_bid, alerts))
         except Exception as e:
             sa.log_http_error(f"add item {item_id} to favorites", e)
             return bad(f"Couldn't add item {item_id} to favorites: {shopgoodwill.describe_error(e)}")
@@ -335,7 +351,7 @@ def create_app(sniper_app: SniperApp) -> Flask:
             return bad(str(e))
         alerts = bool(body.get("alerts", True))
         try:
-            sa.client.add_favorite_note(item_id, watchlist.make_note(max_bid, alerts))
+            with_one_retry(sa.client.add_favorite_note, item_id, watchlist.make_note(max_bid, alerts))
         except Exception as e:
             sa.log_http_error(f"update item {item_id}", e)
             return bad(f"Couldn't update item {item_id}: {shopgoodwill.describe_error(e)}")
