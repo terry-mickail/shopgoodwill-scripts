@@ -319,8 +319,8 @@ class BidSniper:
             )
             message += " | " + watchlist.describe(status, tracked["max_bid"])
         except BaseException as be:
-            self.logger.debug(
-                f"{type(be).__name__} getting item details for time alert - {be}"
+            self.logger.warning(
+                f"Couldn't get item details for the time alert - {shopgoodwill.describe_error(be)}"
             )
 
         self.logger.warning(
@@ -435,8 +435,8 @@ class BidSniper:
 
         except BaseException as be:
             self.logger.error(
-                f"{type(be).__name__} getting info for item ID '{item_id}' - {be} - "
-                "continuing with local clock"
+                f"Couldn't get item details for '{favorite['title']}' - "
+                f"{shopgoodwill.describe_error(be)} - continuing with local clock"
             )
             fire_at = fallback_end_time - self.bid_time_delta
 
@@ -464,7 +464,7 @@ class BidSniper:
             )
         except HTTPError as he:
             self.logger.error(
-                f"HTTPError placing bid on '{title}' - {he}",
+                f"Bid on '{title}' FAILED - {shopgoodwill.describe_error(he)}",
                 extra=self.notify_extra("Bid FAILED", item_id, priority=5),
             )
             return None
@@ -521,7 +521,7 @@ class BidSniper:
                 info = self.bid_shopgoodwill_client.get_item_info(item_id)
             except BaseException as be:
                 self.logger.error(
-                    f"{type(be).__name__} checking result for '{title}' - {be}"
+                    f"Couldn't check the result for '{title}' - {shopgoodwill.describe_error(be)}"
                 )
                 continue
 

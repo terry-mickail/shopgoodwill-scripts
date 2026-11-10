@@ -33,6 +33,44 @@ class IgnoreBuyerApiCookieJar(RequestsCookieJar):
         super().set_cookie(cookie, *args, **kwargs)
 
 
+# Response headers worth recording when a request fails: they distinguish a
+# rate limit (retry-after) or a CDN/firewall block page from an application error
+_DIAGNOSTIC_HEADERS = (
+    "retry-after",
+    "server",
+    "cf-ray",
+    "cf-mitigated",
+    "x-cache",
+    "x-iinfo",
+    "via",
+    "content-type",
+)
+
+
+def describe_error(err: BaseException) -> str:
+    """
+    One-line description of a failed request, with the evidence needed to
+    tell a rate limit from a block: status, diagnostic headers, body start.
+    Falls back to "ExceptionType: message" for anything that isn't an HTTP error.
+    """
+
+    response = getattr(err, "response", None)
+    if not isinstance(err, HTTPError) or response is None:
+        return f"{type(err).__name__}: {err}"
+
+    parts = [f"HTTP {response.status_code} {response.reason or ''}".strip()]
+    for header in _DIAGNOSTIC_HEADERS:
+        if header in response.headers:
+            parts.append(f"{header}={response.headers[header]}")
+    body = " ".join((response.text or "").split())[:200]
+    if body:
+        parts.append(f"body: {body}")
+
+    method = response.request.method if response.request is not None else ""
+    url = response.url.split("?")[0]
+    return f"{method} {url} -> " + " | ".join(parts)
+
+
 class ReauthSession(requests.Session):
     """
     A requests.Session that, when a request fails with HTTP 401,

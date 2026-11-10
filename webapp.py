@@ -121,6 +121,7 @@ class SniperApp:
         self.favorites_cache: Tuple[float, Dict] = (0.0, {})
         self.cache_lock = threading.Lock()
         self.clock_offset: Optional[datetime.timedelta] = None
+        self._recent_errors: Dict[Tuple[str, str], float] = {}
 
         self.sniper_thread = threading.Thread(
             target=self.sniper.start, name="sniper", daemon=True
@@ -166,6 +167,21 @@ class SniperApp:
                 self.item_cache.pop(item_id, None)
         self.sniper.request_refresh()
 
+    def log_http_error(self, action: str, err: BaseException) -> None:
+        """
+        Record a failed request in the activity log with its full evidence.
+        Repeats of the same failure within a minute are logged once, because the
+        page polls every few seconds and would otherwise flood the log.
+        """
+
+        detail = shopgoodwill.describe_error(err)
+        key = (action, detail.split(" | body:")[0])
+        now = time.time()
+        if now - self._recent_errors.get(key, 0) < 60:
+            return
+        self._recent_errors[key] = now
+        self.sniper.logger.warning(f"Couldn't {action} - {detail}")
+
     def save_config(self) -> None:
         """
         Write the in-memory config back to disk (credentials included, unchanged).
@@ -201,7 +217,8 @@ class SniperApp:
             favorites = self.get_favorites()
         except Exception as e:
             favorites = {}
-            error = f"Couldn't read favorites: {type(e).__name__}: {e}"
+            error = f"Couldn't read favorites: {shopgoodwill.describe_error(e)}"
+            self.log_http_error("read favorites", e)
 
         contest_conf = self.sniper.contest_settings()
         for item_id, fav in favorites.items():
@@ -231,7 +248,8 @@ class SniperApp:
                         info["endTime"]
                     ).isoformat()
                 except Exception as e:
-                    row["error"] = f"{type(e).__name__}: {e}"
+                    row["error"] = shopgoodwill.describe_error(e)
+                    self.log_http_error(f"load item {item_id}", e)
             items.append(row)
 
         items.sort(key=lambda r: (not r["tracked"], r["end_utc"] or "9999"))
@@ -289,7 +307,8 @@ def create_app(sniper_app: SniperApp) -> Flask:
         try:
             info = sa.client.get_item_info(item_id)
         except Exception as e:
-            return bad(f"Couldn't load item {item_id}: {type(e).__name__}: {e}")
+            sa.log_http_error(f"load item {item_id}", e)
+            return bad(f"Couldn't load item {item_id}: {shopgoodwill.describe_error(e)}")
         if not info or not info.get("itemId"):
             return bad(f"Item {item_id} wasn't found")
         if info.get("isAuction") is False:
@@ -300,7 +319,8 @@ def create_app(sniper_app: SniperApp) -> Flask:
         try:
             sa.client.add_favorite(item_id, note=watchlist.make_note(max_bid, alerts))
         except Exception as e:
-            return bad(f"Couldn't add item {item_id} to favorites: {type(e).__name__}: {e}")
+            sa.log_http_error(f"add item {item_id} to favorites", e)
+            return bad(f"Couldn't add item {item_id} to favorites: {shopgoodwill.describe_error(e)}")
         sa.invalidate(item_id)
         what = f"max {max_bid:.2f}" if max_bid else "alerts only, no bid"
         sa.sniper.logger.info(f"Added '{info.get('title', item_id)}' ({what})")
@@ -317,7 +337,8 @@ def create_app(sniper_app: SniperApp) -> Flask:
         try:
             sa.client.add_favorite_note(item_id, watchlist.make_note(max_bid, alerts))
         except Exception as e:
-            return bad(f"Couldn't update item {item_id}: {type(e).__name__}: {e}")
+            sa.log_http_error(f"update item {item_id}", e)
+            return bad(f"Couldn't update item {item_id}: {shopgoodwill.describe_error(e)}")
         sa.invalidate(item_id)
         what = f"max {max_bid:.2f}" if max_bid else "no bid"
         sa.sniper.logger.info(f"Updated item {item_id}: {what}, alerts {'on' if alerts else 'off'}")

@@ -97,3 +97,16 @@ def test_test_notify_reports(client):
     c, *_ = client
     r = c.post("/api/test-notify", json={}).get_json()
     assert r["result"]["ntfy"] == "off"
+
+def test_http_errors_logged_once_with_evidence(client):
+    c, sa, notes, _ = client
+    import requests
+    from requests.exceptions import HTTPError
+    resp = requests.models.Response(); resp.status_code = 403; resp.reason = "Forbidden"
+    resp._content = b"blocked"; resp.headers["Retry-After"] = "60"; resp.url = "https://x/api/y"
+    resp.request = requests.Request("GET", "https://x/api/y").prepare()
+    err = HTTPError(response=resp)
+    for _ in range(5):
+        sa.log_http_error("load item 9", err)
+    lines = [e["message"] for e in sa.ring.recent() if "Couldn't load item 9" in e["message"]]
+    assert len(lines) == 1 and "HTTP 403 Forbidden" in lines[0] and "retry-after=60" in lines[0]
