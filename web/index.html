@@ -99,6 +99,7 @@
       <tbody id="rows"></tbody>
     </table>
     <div class="empty" id="emptyRows">Nothing tracked yet. Add an auction above.</div>
+    <div class="hint">Prices refresh every 5 minutes, and every 30 seconds in an item's last 10 minutes. The countdown is live, and the bid always uses fresh data.</div>
   </section>
 
   <section id="otherSection" style="display:none">
@@ -358,7 +359,10 @@ $("testNotify").addEventListener("click", async () => {
 });
 
 refresh();
-setInterval(refresh, 5000);
+// Poll only while the tab is visible: a hidden tab asks ShopGoodwill for nothing.
+// Coming back to the tab refreshes right away.
+setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 setInterval(tick, 250);
 </script>
 </body>

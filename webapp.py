@@ -36,10 +36,12 @@ import watchlist
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEM_ID_PATTERN = re.compile(r"(?:/item/)?(\d{5,12})(?:\D|$)")
 
-# how long cached item details stay fresh (seconds)
-ITEM_TTL_NORMAL = 60
-ITEM_TTL_ENDING = 10  # for items ending within 10 minutes
-FAVORITES_TTL = 20
+# How long cached data stays fresh (seconds). These set how often the page asks
+# ShopGoodwill for anything; keep them gentle. The sniper's own pre-bid check
+# fetches fresh details regardless, so these never affect bid timing.
+ITEM_TTL_NORMAL = 300
+ITEM_TTL_ENDING = 30  # for items ending within 10 minutes
+FAVORITES_TTL = 120  # edits made from the page clear this immediately
 
 
 class RingBufferHandler(logging.Handler):
