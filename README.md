@@ -16,6 +16,16 @@ The watchlist lives in your ShopGoodwill favorites: each tracked item's note is
 `{"max_bid": 9.0, "alerts": true}`. Favorites without such a note are listed
 separately and are never bid on.
 
+eBay auctions go through BidSlammer (https://bidslammer.com), which places the
+bid from its own servers, so your PC doesn't need to be on for them. Put your
+BidSlammer API key (Preferences tab; API access needs a premium account) in
+config.json under "bidslammer": {"api_key": "..."} and restart. Then paste an
+eBay link or 12-digit eBay item number into the same box. Every eBay snipe asks
+you to confirm the exact amount first, because eBay auction wins can't be
+cancelled. eBay snipes can't be dry-run: in dry-run mode the page won't send
+them, and ones already on BidSlammer stay live until you cancel them. Your max
+and alert choice for each eBay snipe are kept in ebay_snipes.json.
+
 `python check_access.py` is a read-only check of login, favorites and the clock.
 Tests: `pip install -r requirements-dev.txt` then `python -m pytest tests`.
 

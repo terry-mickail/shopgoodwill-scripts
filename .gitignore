@@ -3,3 +3,5 @@ config.json
 seen_listings.json
 .venv/
 config.json.tmp
+ebay_snipes.json
+ebay_snipes.json.tmp

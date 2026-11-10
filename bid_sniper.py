@@ -192,7 +192,9 @@ class BidSniper:
         return
 
     @staticmethod
-    def notify_extra(title: str, item_id: int, priority: int = 3) -> Dict:
+    def notify_extra(
+        title: str, item_id: int, priority: int = 3, url: Optional[str] = None
+    ) -> Dict:
         """
         Build the logging `extra` dict that marks a log record
         for push/desktop notification (see notify.py)
@@ -206,7 +208,7 @@ class BidSniper:
         return {
             "notify": True,
             "notify_title": title,
-            "notify_url": f"https://shopgoodwill.com/item/{item_id}",
+            "notify_url": url or f"https://shopgoodwill.com/item/{item_id}",
             "notify_priority": priority,
         }
 

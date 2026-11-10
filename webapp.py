@@ -29,6 +29,8 @@ import parsedatetime
 from flask import Flask, jsonify, request, send_from_directory
 
 import bid_sniper
+import bidslammer
+import ebay_desk
 import notify
 import shopgoodwill
 import watchlist
@@ -145,8 +147,30 @@ class SniperApp:
             target=self.sniper.start, name="sniper", daemon=True
         )
 
+        # eBay through BidSlammer: only if an API key is configured
+        self.ebay: Optional[ebay_desk.EbayDesk] = None
+        bs_key = (self.config.get("bidslammer") or {}).get("api_key", "").strip()
+        if bs_key:
+            sn = self.sniper
+            self.ebay = ebay_desk.EbayDesk(
+                client=bidslammer.BidSlammer(bs_key),
+                store=ebay_desk.EbayStore(
+                    os.path.join(os.path.dirname(os.path.abspath(config_path)), "ebay_snipes.json")
+                ),
+                logger=sn.logger,
+                notify_extra=sn.notify_extra,
+                tie_breaker=sn.tie_breaker,
+                lead_seconds=lambda: sn.bid_time_delta.total_seconds(),
+                is_dry_run=lambda: sn.dry_run,
+                contest_settings=sn.contest_settings,
+                alert_deltas=lambda: sn.alert_time_deltas,
+            )
+
     def start_sniper(self) -> None:
         self.sniper_thread.start()
+        if self.ebay:
+            self.ebay.start_watcher()
+            self.sniper.logger.info("eBay snipes enabled through BidSlammer")
         self.sniper.logger.info(
             "Sniper started in " + ("DRY-RUN" if self.sniper.dry_run else "LIVE") + " mode"
         )
@@ -248,6 +272,7 @@ class SniperApp:
                 end_utc = None
             row = {
                 "id": item_id,
+                "site": "sgw",
                 "title": fav.get("title", str(item_id)),
                 "url": f"https://shopgoodwill.com/item/{item_id}",
                 "end_utc": end_utc.isoformat() if end_utc else None,
@@ -275,11 +300,20 @@ class SniperApp:
                     self.log_http_error(f"load item {item_id}", e)
             items.append(row)
 
+        if self.ebay:
+            try:
+                items.extend(self.ebay.rows())
+            except Exception as e:
+                self.log_http_error("read your BidSlammer snipes", e)
+                ebay_error = f"Couldn't read your eBay snipes from BidSlammer: {shopgoodwill.describe_error(e)}"
+                error = f"{error} | {ebay_error}" if error else ebay_error
+
         items.sort(key=lambda r: (not r["tracked"], r["end_utc"] or "9999"))
 
         offset = self.clock_offset
         return {
             "dry_run": self.sniper.dry_run,
+            "ebay_enabled": self.ebay is not None,
             "sniper_alive": self.sniper_thread.is_alive(),
             "server_now_utc": (
                 datetime.datetime.now(datetime.timezone.utc) + (offset or datetime.timedelta(0))
@@ -315,9 +349,46 @@ def create_app(sniper_app: SniperApp) -> Flask:
     def api_state():
         return jsonify(sa.state())
 
+    def ebay_confirm_text(p: Dict) -> str:
+        breakdown = (
+            f" (max ${p['max_bid']:.2f} + tie-breaker ${p['tie_breaker']:.2f})"
+            if p["tie_breaker"]
+            else ""
+        )
+        price = f"${p['current_price']:.2f}" if p["current_price"] is not None else "?"
+        minimum = f"${p['minimum']:.2f}" if p["minimum"] is not None else "?"
+        return (
+            f"Send this eBay snipe to BidSlammer?\n\n{p['title']}\n"
+            f"Bid: ${p['bid']:.2f}{breakdown}\n"
+            f"Current price {price}, minimum {minimum}\n"
+            f"Fires {p['delay']} seconds before the end, from BidSlammer's servers.\n\n"
+            "eBay auction wins can't be cancelled."
+        )
+
+    def ebay_send(item_id: int, body: Dict):
+        """Preview (needs_confirm) or place an eBay snipe"""
+        if not sa.ebay:
+            return bad("eBay isn't set up: add your BidSlammer API key to config.json")
+        try:
+            max_bid = read_max_bid(body.get("max_bid"))
+            alerts = bool(body.get("alerts", True))
+            if not body.get("confirm"):
+                p = sa.ebay.preview(item_id, max_bid or 0)
+                return jsonify({"ok": True, "needs_confirm": True, "confirm_text": ebay_confirm_text(p), "preview": p})
+            p = sa.ebay.place(item_id, max_bid or 0, alerts)
+            return jsonify({"ok": True, "id": item_id, "placed": p})
+        except (ValueError, bidslammer.BidSlammerError) as e:
+            return bad(str(e))
+        except Exception as e:
+            sa.log_http_error(f"send eBay snipe {item_id}", e)
+            return bad(f"Couldn't reach BidSlammer: {shopgoodwill.describe_error(e)}")
+
     @app.post("/api/items")
     def api_add_item():
         body = request.get_json(force=True) or {}
+        ebay_id = ebay_desk.parse_ebay_item(str(body.get("item", "")))
+        if ebay_id:
+            return ebay_send(ebay_id, body)
         item_id = parse_item_id(str(body.get("item", "")))
         if not item_id:
             return bad("Paste a ShopGoodwill item URL or item number")
@@ -365,6 +436,30 @@ def create_app(sniper_app: SniperApp) -> Flask:
         sa.invalidate(item_id)
         what = f"max {max_bid:.2f}" if max_bid else "no bid"
         sa.sniper.logger.info(f"Updated item {item_id}: {what}, alerts {'on' if alerts else 'off'}")
+        return jsonify({"ok": True})
+
+    @app.post("/api/ebay/<int:item_id>")
+    def api_ebay_update(item_id: int):
+        return ebay_send(item_id, request.get_json(force=True) or {})
+
+    @app.post("/api/ebay/<int:item_id>/alerts")
+    def api_ebay_alerts(item_id: int):
+        if not sa.ebay:
+            return bad("eBay isn't set up")
+        sa.ebay.set_alerts(item_id, bool((request.get_json(force=True) or {}).get("alerts", True)))
+        return jsonify({"ok": True})
+
+    @app.post("/api/ebay/<int:item_id>/cancel")
+    def api_ebay_cancel(item_id: int):
+        if not sa.ebay:
+            return bad("eBay isn't set up")
+        try:
+            sa.ebay.cancel(item_id)
+        except bidslammer.BidSlammerError as e:
+            return bad(str(e))
+        except Exception as e:
+            sa.log_http_error(f"cancel eBay snipe {item_id}", e)
+            return bad(f"Couldn't reach BidSlammer: {shopgoodwill.describe_error(e)}")
         return jsonify({"ok": True})
 
     @app.post("/api/dry-run")

@@ -51,6 +51,10 @@
   .chip.Active { background: var(--amber-bg); color: var(--amber); }
   .chip.Contested { background: var(--red-bg); color: var(--red); }
   .chip.out { background: #eee; color: #555; }
+  .site { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .3px; padding: 0 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; }
+  .site.ebay { background: #e4edf6; color: #24527a; }
+  .site.sgw { background: #ecebe6; color: #555; }
+  .mode .note { font-weight: 400; font-size: 12.5px; }
   .detail { color: var(--muted); font-size: 12px; }
   .maxcell { white-space: nowrap; }
   .empty { color: var(--muted); padding: 10px 0; }
@@ -72,6 +76,7 @@
 </header>
 <div class="mode dry" id="mode">
   <span id="modeText">DRY RUN: no real bids will be placed</span>
+  <span class="note" id="modeNote"></span>
   <button id="modeBtn" type="button">Go live</button>
 </div>
 <main>
@@ -80,12 +85,12 @@
   <section>
     <h2>Add an auction</h2>
     <form class="add" id="addForm">
-      <input class="item" type="text" id="addItem" placeholder="Paste a ShopGoodwill URL or item number" autocomplete="off" required>
+      <input class="item" type="text" id="addItem" placeholder="Paste a ShopGoodwill or eBay URL, or an item number" autocomplete="off" required>
       <span>$</span><input class="money" type="number" id="addMax" step="0.01" min="0.01" placeholder="Max bid">
       <label><input type="checkbox" id="addAlerts" checked> Alerts</label>
       <button class="primary" type="submit">Add</button>
     </form>
-    <div class="hint">Leave max blank to watch with alerts only. Your max goes in once, a few seconds before the end.</div>
+    <div class="hint">Leave max blank to watch with alerts only (ShopGoodwill). Your max goes in once, a few seconds before the end. eBay links and 12-digit eBay item numbers go to BidSlammer, which bids from its own servers.</div>
     <div class="msg" id="addMsg"></div>
   </section>
 
@@ -196,9 +201,17 @@ function makeRow(item) {
   const maxIn = tr.querySelector(".max");
   maxIn.addEventListener("input", () => { maxIn.dataset.dirty = "1"; });
   maxIn.addEventListener("keydown", (e) => { if (e.key === "Enter") tr.querySelector(".save").click(); });
+  tr.dataset.site = item.site || "sgw";
   tr.querySelector(".save").addEventListener("click", () => saveItem(item.id, tr, maxIn.value));
-  tr.querySelector(".alerts").addEventListener("change", () => saveItem(item.id, tr, maxIn.dataset.dirty ? maxIn.value : (tr.dataset.max || "")));
+  tr.querySelector(".alerts").addEventListener("change", () => {
+    if (tr.dataset.site === "ebay") return ebayAlerts(item.id, tr);
+    saveItem(item.id, tr, maxIn.dataset.dirty ? maxIn.value : (tr.dataset.max || ""));
+  });
   tr.querySelector(".cancel").addEventListener("click", () => {
+    if (tr.dataset.site === "ebay") {
+      if (confirm("Cancel this eBay snipe on BidSlammer? It's removed from the watchlist.")) ebayCancel(item.id);
+      return;
+    }
     if (confirm("Cancel the bid on this item? It stays on your watchlist with alerts.")) saveItem(item.id, tr, "");
   });
   return tr;
@@ -207,7 +220,12 @@ function makeRow(item) {
 function updateRow(tr, item) {
   const a = tr.querySelector(".title a");
   a.href = item.url; a.textContent = item.title;
-  tr.querySelector(".title .sub").textContent = "#" + item.id + (item.error ? "  (details unavailable: " + item.error + ")" : "");
+  const sub = tr.querySelector(".title .sub");
+  sub.textContent = "";
+  const tag = document.createElement("span");
+  tag.className = "site " + (item.site || "sgw"); tag.textContent = item.site === "ebay" ? "eBay" : "SGW";
+  sub.appendChild(tag);
+  sub.appendChild(document.createTextNode("#" + item.id + (item.error ? "  (details unavailable: " + item.error + ")" : "")));
   const ends = tr.querySelector(".ends");
   if (item.end_utc) ends.dataset.end = item.end_utc;
   tr.querySelector(".price").textContent = money(item.current_price);
@@ -229,8 +247,34 @@ function updateRow(tr, item) {
   tr.querySelector(".cancel").style.visibility = item.max_bid ? "visible" : "hidden";
 }
 
+// eBay: preview first, then send only after the confirmation names the exact amount
+async function ebaySend(path, payload) {
+  const pre = await api(path, payload);
+  if (!pre.needs_confirm) return pre;
+  if (!confirm(pre.confirm_text)) return null;
+  return api(path, { ...payload, confirm: true });
+}
+
+async function ebayAlerts(id, tr) {
+  try { await api("/api/ebay/" + id + "/alerts", { alerts: tr.querySelector(".alerts").checked }); refresh(); }
+  catch (e) { showError("Couldn't change alerts: " + e.message); }
+}
+
+async function ebayCancel(id) {
+  try { await api("/api/ebay/" + id + "/cancel", {}); refresh(); }
+  catch (e) { showError("Couldn't cancel: " + e.message); }
+}
+
 async function saveItem(id, tr, maxValue) {
   const alerts = tr.querySelector(".alerts").checked;
+  if (tr.dataset.site === "ebay") {
+    if (maxValue === "") { if (confirm("Cancel this eBay snipe on BidSlammer?")) ebayCancel(id); return; }
+    try {
+      const r = await ebaySend("/api/ebay/" + id, { max_bid: Number(maxValue), alerts });
+      if (r) { delete tr.querySelector(".max").dataset.dirty; $("err").style.display = "none"; refresh(); }
+    } catch (e) { showError("eBay snipe not changed: " + e.message); }
+    return;
+  }
   try {
     await api("/api/items/" + id, { max_bid: maxValue === "" ? null : Number(maxValue), alerts });
     delete tr.querySelector(".max").dataset.dirty;
@@ -251,6 +295,9 @@ function render(s) {
   mode.className = "mode " + (s.dry_run ? "dry" : "live");
   $("modeText").textContent = s.dry_run ? "DRY RUN: no real bids will be placed" : "LIVE: real bids WILL be placed";
   $("modeBtn").textContent = s.dry_run ? "Go live" : "Back to dry run";
+  $("modeNote").textContent = s.ebay_enabled
+    ? (s.dry_run ? "eBay snipes can't be added in dry run; ones already on BidSlammer stay live." : "eBay snipes bid from BidSlammer's servers.")
+    : "";
 
   if (s.error) showError(s.error); else $("err").style.display = "none";
 
@@ -318,8 +365,9 @@ $("addForm").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const maxV = $("addMax").value;
   try {
-    await api("/api/items", { item: $("addItem").value, max_bid: maxV === "" ? null : Number(maxV), alerts: $("addAlerts").checked });
-    showMsg($("addMsg"), "Added.", true);
+    const r = await ebaySend("/api/items", { item: $("addItem").value, max_bid: maxV === "" ? null : Number(maxV), alerts: $("addAlerts").checked });
+    if (!r) { showMsg($("addMsg"), "Not sent.", false); return; }
+    showMsg($("addMsg"), r.placed ? "eBay snipe set on BidSlammer." : "Added.", true);
     $("addItem").value = ""; $("addMax").value = "";
     refresh();
   } catch (e) { showMsg($("addMsg"), e.message, false); }

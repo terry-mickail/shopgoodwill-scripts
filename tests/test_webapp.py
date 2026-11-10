@@ -4,10 +4,14 @@ from conftest import API, item_payload, pt_str
 import shopgoodwill as sgwmod
 import webapp, watchlist
 
+ACTIVE = {}
+
+
 @pytest.fixture
 def client(tmp_path):
     rsps = responses.RequestsMock(assert_all_requests_are_fired=False)
     rsps.start()
+    ACTIVE["rsps"] = rsps
     rsps.add(responses.GET, sgwmod.Shopgoodwill.LOGIN_PAGE_URL, body="ok")
     rsps.add(responses.POST, API + "/SignIn/Login", json={"message": "ok", "accessToken": "t"})
     end = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
@@ -36,6 +40,7 @@ def client(tmp_path):
     sa = webapp.SniperApp(str(path))
     app = webapp.create_app(sa)
     yield app.test_client(), sa, notes, path
+    sa.notify_listener.stop()  # drain notifications while the mock is still active
     rsps.stop(); rsps.reset()
 
 def test_parse_item_id():
@@ -139,3 +144,49 @@ def test_tie_breaker_setting(client):
     assert r["ok"] and r["settings"]["tie_breaker"] == 0.37 and json.loads(path.read_text())["bid_sniper"]["tie_breaker"] == 0.37
     item = c.get("/api/state").get_json()["items"][0]
     assert item["max_bid"] == 9.0 and item["bid_amount"] == 9.37
+
+def _ebay_client(tmp_path, live=True):
+    import webapp as wa, bidslammer as bs
+    cfg = {"auth_info": {"username": "u", "password": "p"}, "bid_sniper": {"tie_breaker": 0.37},
+           "bidslammer": {"api_key": "k"}}
+    path = tmp_path / "config.json"; path.write_text(json.dumps(cfg))
+    sa = wa.SniperApp(str(path), live=live)
+    CREATED.append(sa)
+    return wa.create_app(sa).test_client(), sa, bs
+
+
+CREATED = []
+
+
+@pytest.fixture(autouse=True)
+def _stop_created_listeners():
+    yield
+    while CREATED:
+        CREATED.pop().notify_listener.stop()
+
+def test_ebay_add_needs_confirm_then_places(client, tmp_path):
+    import os, copy, time as _t, bidslammer as bs
+    fx = json.load(open(os.path.join(os.path.dirname(__file__), "fixtures", "bidslammer_responses.json")))
+    item = copy.deepcopy(fx["fetch_item_live"]); item.update(endTimeStamp=_t.time() + 7200)
+    m = ACTIVE["rsps"]
+    m.add(responses.GET, bs.API_ROOT + "fetchItem", json=item)
+    m.add(responses.GET, bs.API_ROOT + "addBid", json=dict(fx["add_ok"], bid="20.37"))
+    st = copy.deepcopy(fx["status_pending"]); st["item_info"]["bid"] = "20.37"
+    m.add(responses.GET, bs.API_ROOT + "checkSnipeStatus", json=st)
+    c, sa, _ = _ebay_client(tmp_path, live=True)
+    r = c.post("/api/items", json={"item": "https://www.ebay.com/itm/880087287709", "max_bid": 20}).get_json()
+    assert r["needs_confirm"] and "Bid: $20.37 (max $20.00 + tie-breaker $0.37)" in r["confirm_text"]
+    assert not [x for x in m.calls if "addBid" in x.request.url]
+    r = c.post("/api/items", json={"item": "https://www.ebay.com/itm/880087287709", "max_bid": 20, "confirm": True}).get_json()
+    assert r["ok"] and r["placed"]["bid"] == 20.37
+    assert sa.ebay.store.get(880087287709)["max_bid"] == 20.0
+
+def test_ebay_refused_in_dry_run(client, tmp_path):
+    c, sa, _ = _ebay_client(tmp_path, live=False)
+    r = c.post("/api/items", json={"item": "880087287709", "max_bid": 20, "confirm": True})
+    assert r.status_code == 400 and "can't be dry-run" in r.get_json()["error"]
+
+def test_ebay_not_configured(client):
+    c, sa, notes, _ = client
+    r = c.post("/api/items", json={"item": "880087287709", "max_bid": 20})
+    assert r.status_code == 400 and "BidSlammer API key" in r.get_json()["error"]

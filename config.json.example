@@ -52,6 +52,9 @@
         ],
         "favorite_default_note": "{\"max_bid\": 0.99}"
     },
+    "bidslammer": {
+        "api_key": ""
+    },
     "notifications": {
         "ntfy_server": "https://ntfy.sh",
         "ntfy_topic": "",
