@@ -119,8 +119,10 @@
       <summary>Settings</summary>
       <form id="settingsForm">
         <div class="grid">
-          <label for="sSnipe">Bid this many seconds before the end</label>
-          <div><input type="number" id="sSnipe" min="1" max="120" step="0.5" class="money"> <span class="hint">5 is a good default; your clock offset is corrected automatically</span></div>
+          <label for="sSnipe">ShopGoodwill: bid this many seconds before the end</label>
+          <div><input type="number" id="sSnipe" min="1" max="120" step="0.5" class="money"> <span class="hint">your PC places these bids; its clock offset is corrected automatically</span></div>
+          <label for="sEbaySnipe">eBay: bid this many seconds before the end</label>
+          <div><input type="number" id="sEbaySnipe" min="1" max="15" step="1" class="money"> <span class="hint">whole seconds, 1 to 15; BidSlammer places these bids. Applies to eBay snipes added or re-saved after you change it.</span></div>
           <label for="sTie">Tie-breaker</label>
           <div>$ <input type="number" id="sTie" min="0" max="5" step="0.01" class="money"> <span class="hint">added on top of every max, so you beat anyone who picked the same number (a tie goes to the earlier bid). You may pay up to this much over your max. Odd cents like 0.37 work well.</span></div>
           <label for="sAlerts">Alert times</label>
@@ -241,6 +243,7 @@ function updateRow(tr, item) {
   if (item.max_bid && item.bid_amount && item.bid_amount > item.max_bid) d = `bids ${money(item.bid_amount)} with tie-breaker` + (d ? " | " + d : "");
   if (item.max_bid && item.pct_of_max !== null && item.pct_of_max !== undefined && !item.priced_out) d += (d ? " | " : "") + item.pct_of_max + "% of your bid";
   if (!item.max_bid) d += (d ? " | " : "") + "alerts only, no bid";
+  if (item.site === "ebay" && item.lead_seconds) d += (d ? " | " : "") + `fires ${item.lead_seconds}s before the end`;
   detail.textContent = d;
   const al = tr.querySelector(".alerts");
   if (document.activeElement !== al) al.checked = !!item.alerts;
@@ -289,7 +292,8 @@ function render(s) {
 
   const off = s.clock_offset_seconds;
   $("meta").textContent = (s.sniper_alive ? "sniper running" : "SNIPER STOPPED") +
-    (off === null ? "" : ` | your clock is ${(-off >= 0 ? "+" : "") + (-off).toFixed(2)}s vs ShopGoodwill (corrected)`);
+    (off === null ? "" : ` | your clock is ${(-off >= 0 ? "+" : "") + (-off).toFixed(2)}s vs ShopGoodwill (corrected)`) +
+    (s.ebay_round_trip_ms == null ? "" : ` | BidSlammer answers in ${s.ebay_round_trip_ms}ms (it bids on eBay from its own servers)`);
 
   const mode = $("mode");
   mode.className = "mode " + (s.dry_run ? "dry" : "live");
@@ -344,6 +348,7 @@ function render(s) {
 
 function fillSettings(st) {
   $("sSnipe").value = st.snipe_seconds;
+  $("sEbaySnipe").value = st.ebay_snipe_seconds;
   $("sTie").value = Number(st.tie_breaker || 0).toFixed(2);
   $("sAlerts").value = st.alert_times.join(", ");
   $("sMinBids").value = st.contest_min_bids;
@@ -385,6 +390,7 @@ $("settingsForm").addEventListener("submit", async (ev) => {
   try {
     const r = await api("/api/settings", {
       snipe_seconds: Number($("sSnipe").value),
+      ebay_snipe_seconds: Number($("sEbaySnipe").value),
       tie_breaker: Number($("sTie").value || 0),
       alert_times: $("sAlerts").value.split(","),
       contest_min_bids: Number($("sMinBids").value),

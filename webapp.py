@@ -38,6 +38,9 @@ import watchlist
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEM_ID_PATTERN = re.compile(r"(?:/item/)?(\d{5,12})(?:\D|$)")
 
+# eBay lead time when none is configured (BidSlammer recommends 5; range 1-15)
+DEFAULT_EBAY_SECONDS = 5
+
 # How long cached data stays fresh (seconds). These set how often the page asks
 # ShopGoodwill for anything; keep them gentle. The sniper's own pre-bid check
 # fetches fresh details regardless, so these never affect bid timing.
@@ -160,7 +163,9 @@ class SniperApp:
                 logger=sn.logger,
                 notify_extra=sn.notify_extra,
                 tie_breaker=sn.tie_breaker,
-                lead_seconds=lambda: sn.bid_time_delta.total_seconds(),
+                lead_seconds=lambda: float(
+                    sn.config["bid_sniper"].get("ebay_snipe_seconds", DEFAULT_EBAY_SECONDS)
+                ),
                 is_dry_run=lambda: sn.dry_run,
                 contest_settings=sn.contest_settings,
                 alert_deltas=lambda: sn.alert_time_deltas,
@@ -243,6 +248,7 @@ class SniperApp:
         notes = self.config.get("notifications", {})
         return {
             "snipe_seconds": self.sniper.bid_time_delta.total_seconds(),
+            "ebay_snipe_seconds": int(conf.get("ebay_snipe_seconds", DEFAULT_EBAY_SECONDS)),
             "alert_times": conf.get("alert_time_deltas", []),
             "tie_breaker": self.sniper.tie_breaker(),
             "contest_window_minutes": float(conf.get("contest_window_minutes", 30)),
@@ -319,6 +325,7 @@ class SniperApp:
                 datetime.datetime.now(datetime.timezone.utc) + (offset or datetime.timedelta(0))
             ).isoformat(),
             "clock_offset_seconds": offset.total_seconds() if offset is not None else None,
+            "ebay_round_trip_ms": self.ebay.client.round_trip_ms() if self.ebay else None,
             "settings": self.settings_view(),
             "items": items,
             "log": self.ring.recent()[:150],
@@ -480,7 +487,16 @@ def create_app(sniper_app: SniperApp) -> Flask:
         try:
             snipe_seconds = float(body["snipe_seconds"])
             if not (1 <= snipe_seconds <= 120):
-                raise ValueError("Snipe time must be between 1 and 120 seconds")
+                raise ValueError("ShopGoodwill snipe time must be between 1 and 120 seconds")
+            ebay_seconds = body.get("ebay_snipe_seconds", DEFAULT_EBAY_SECONDS)
+            if float(ebay_seconds) != int(float(ebay_seconds)) or not (
+                bidslammer.MIN_DELAY <= int(float(ebay_seconds)) <= bidslammer.MAX_DELAY
+            ):
+                raise ValueError(
+                    f"eBay snipe time must be a whole number from {bidslammer.MIN_DELAY} "
+                    f"to {bidslammer.MAX_DELAY} seconds (BidSlammer's range)"
+                )
+            ebay_seconds = int(float(ebay_seconds))
             alert_times = [t.strip() for t in body.get("alert_times", []) if t.strip()]
             alert_deltas = parse_time_deltas(alert_times)
             window = float(body["contest_window_minutes"])
@@ -507,6 +523,7 @@ def create_app(sniper_app: SniperApp) -> Flask:
         with sa.config_lock:
             conf = sa.config["bid_sniper"]
             conf["bid_snipe_time_delta"] = f"{snipe_seconds:g} seconds"
+            conf["ebay_snipe_seconds"] = ebay_seconds
             conf["alert_time_deltas"] = alert_times
             conf["contest_window_minutes"] = window
             conf["contest_min_bids"] = min_bids

@@ -109,3 +109,13 @@ def test_end_from_overtime():
 def test_fixture_has_no_personal_ids():
     s = json.dumps(FX)
     assert "te_586154" not in s and "91611" not in s
+
+@responses.activate
+def test_round_trip_is_median_of_recent_calls():
+    c = client()
+    assert c.round_trip_ms() is None
+    responses.add(responses.GET, R + "justTesting", json=FX["test_ok"])
+    c.test(); c.test()
+    assert isinstance(c.round_trip_ms(), (int, float))
+    c._round_trips.clear(); c._round_trips.extend([100, 5000, 120])
+    assert c.round_trip_ms() == 120  # one slow call doesn't skew it

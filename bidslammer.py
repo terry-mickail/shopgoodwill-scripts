@@ -21,9 +21,11 @@ probe_write.py), where the published docs were silent:
     relied on: this app only ever adds live snipes.
 """
 
+import collections
 import datetime
+import statistics
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import requests
 
@@ -60,14 +62,28 @@ class BidSlammer:
         self.api_key = api_key
         self.session = session or requests.Session()
         self.session.headers.setdefault("User-Agent", "terry-sniper/1.0 (+BidSlammer API)")
+        # recent round trips to BidSlammer, in milliseconds
+        self._round_trips: Deque[float] = collections.deque(maxlen=20)
+
+    def round_trip_ms(self) -> Optional[float]:
+        """
+        Median of the last 20 round trips from this PC to BidSlammer's API.
+        This is NOT the delay between BidSlammer and eBay (which places the bid
+        and which nobody outside BidSlammer can measure); it shows whether
+        BidSlammer is reachable and answering promptly.
+        """
+
+        return round(statistics.median(self._round_trips)) if self._round_trips else None
 
     # ---------- transport ----------
 
     def _get(self, method: str, **params) -> Any:
         params = {k: v for k, v in params.items() if v is not None}
+        started = time.monotonic()
         res = self.session.get(
             API_ROOT + method, params={"key": self.api_key, **params}, timeout=DEFAULT_TIMEOUT
         )
+        self._round_trips.append((time.monotonic() - started) * 1000)
         res.raise_for_status()
         try:
             return res.json()

@@ -35,6 +35,7 @@
     "bid_sniper": {
         "refresh_seconds": 300,
         "bid_snipe_time_delta": "5 seconds",
+        "ebay_snipe_seconds": 5,
         "bid_preflight_seconds": 20,
         "result_check_delay_seconds": 60,
         "contest_window_minutes": 30,

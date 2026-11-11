@@ -190,3 +190,24 @@ def test_ebay_not_configured(client):
     c, sa, notes, _ = client
     r = c.post("/api/items", json={"item": "880087287709", "max_bid": 20})
     assert r.status_code == 400 and "BidSlammer API key" in r.get_json()["error"]
+
+def test_separate_lead_times(client, tmp_path):
+    import os, copy, time as _t, bidslammer as bs
+    c, sa, _ = _ebay_client(tmp_path, live=True)
+    base = {"snipe_seconds": 3, "alert_times": ["1 hour"], "contest_window_minutes": 30, "contest_min_bids": 3,
+            "contest_min_bidders": 2, "ntfy_topic": "", "ntfy_server": "https://ntfy.sh", "windows_toast": False, "tie_breaker": 0}
+    for bad in (0, 16, 4.5):
+        r = c.post("/api/settings", json=dict(base, ebay_snipe_seconds=bad))
+        assert r.status_code == 400 and "eBay snipe time" in r.get_json()["error"]
+    r = c.post("/api/settings", json=dict(base, ebay_snipe_seconds=5)).get_json()
+    assert r["ok"] and r["settings"]["snipe_seconds"] == 3 and r["settings"]["ebay_snipe_seconds"] == 5
+    assert sa.sniper.bid_time_delta.total_seconds() == 3 and sa.ebay.delay() == 5
+    fx = json.load(open(os.path.join(os.path.dirname(__file__), "fixtures", "bidslammer_responses.json")))
+    item = copy.deepcopy(fx["fetch_item_live"]); item.update(endTimeStamp=_t.time() + 7200)
+    ACTIVE["rsps"].add(responses.GET, bs.API_ROOT + "fetchItem", json=item)
+    pre = c.post("/api/items", json={"item": "880087287709", "max_bid": 20}).get_json()
+    assert pre["preview"]["delay"] == 5 and "Fires 5 seconds before the end" in pre["confirm_text"]
+
+def test_ebay_lead_time_defaults_to_5(client, tmp_path):
+    c, sa, _ = _ebay_client(tmp_path, live=True)
+    assert sa.ebay.delay() == 5 and c.get("/api/state").get_json()["settings"]["ebay_snipe_seconds"] == 5

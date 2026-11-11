@@ -153,3 +153,11 @@ def test_results_first_run_silent_then_reports(tmp_path, caplog):
     n_before = text.count("WON on eBay")
     d._results()
     assert caplog.text.count("WON on eBay") == n_before  # reported once
+
+@responses.activate
+def test_row_shows_its_lead_time(tmp_path):
+    d = make_desk(tmp_path)
+    responses.add(responses.GET, R + "getUserItems", json=[dict(FX["list_current_one"][0], delay="7")])
+    responses.add(responses.GET, R + "fetchItem", json=live_item())
+    responses.add(responses.GET, R + "getAllBidders", json=FX["bidders"])
+    assert d.rows()[0]["lead_seconds"] == 7.0

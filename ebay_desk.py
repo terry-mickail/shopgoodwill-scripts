@@ -287,6 +287,7 @@ class EbayDesk:
                 "bid_amount": bid,
                 "alerts": mine.get("alerts", True),
                 "current_price": bidslammer.money(s.get("cost")),
+                "lead_seconds": bidslammer.money(s.get("delay")),
             }
             try:
                 item, bids = self.details(item_no, end)
