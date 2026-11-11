@@ -85,3 +85,12 @@ def test_priced_out_skips_bid(make_sniper):
                   json=item_payload(end, minimumBid=752.0))
     asyncio.run(b.place_bid(1, end))
     assert not [c for c in responses.calls if "PlaceBid" in c.request.url]
+
+@responses.activate
+def test_no_bid_after_item_deleted(make_sniper, caplog):
+    """Scheduled earlier, then removed from favorites: the bid must not fire."""
+    b = make_sniper(responses)
+    end = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=1.2)
+    responses.add(responses.POST, f"{API}/Favorite/GetAllFavoriteItemsByType", json={"data": []})
+    asyncio.run(b.place_bid(1, end))
+    assert not [c for c in responses.calls if "PlaceBid" in c.request.url]

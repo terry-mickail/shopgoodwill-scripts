@@ -54,6 +54,8 @@
   .site { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .3px; padding: 0 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; }
   .site.ebay { background: #e4edf6; color: #24527a; }
   .site.sgw { background: #ecebe6; color: #555; }
+  td.acts { white-space: nowrap; text-align: right; }
+  td.acts button + button { margin-left: 4px; }
   .mode .note { font-weight: 400; font-size: 12.5px; }
   .detail { color: var(--muted); font-size: 12px; }
   .maxcell { white-space: nowrap; }
@@ -199,7 +201,8 @@ function makeRow(item) {
         <button class="small save" type="button">Save</button></td>
     <td><span class="chip"></span><div class="detail"></div></td>
     <td><input class="alerts" type="checkbox"></td>
-    <td><button class="small danger cancel" type="button">Cancel bid</button></td>`;
+    <td class="acts"><button class="small danger cancel" type="button">Cancel bid</button>
+        <button class="small del" type="button" title="Stop tracking this auction">Delete</button></td>`;
   const maxIn = tr.querySelector(".max");
   maxIn.addEventListener("input", () => { maxIn.dataset.dirty = "1"; });
   maxIn.addEventListener("keydown", (e) => { if (e.key === "Enter") tr.querySelector(".save").click(); });
@@ -209,6 +212,7 @@ function makeRow(item) {
     if (tr.dataset.site === "ebay") return ebayAlerts(item.id, tr);
     saveItem(item.id, tr, maxIn.dataset.dirty ? maxIn.value : (tr.dataset.max || ""));
   });
+  tr.querySelector(".del").addEventListener("click", () => deleteItem(item.id, tr.dataset.site, tr.querySelector(".title a").textContent));
   tr.querySelector(".cancel").addEventListener("click", () => {
     if (tr.dataset.site === "ebay") {
       if (confirm("Cancel this eBay snipe on BidSlammer? It's removed from the watchlist.")) ebayCancel(item.id);
@@ -247,7 +251,8 @@ function updateRow(tr, item) {
   detail.textContent = d;
   const al = tr.querySelector(".alerts");
   if (document.activeElement !== al) al.checked = !!item.alerts;
-  tr.querySelector(".cancel").style.visibility = item.max_bid ? "visible" : "hidden";
+  // eBay: cancelling the snipe IS removing it, so one button; ShopGoodwill: cancel keeps the alerts, delete stops tracking
+  tr.querySelector(".cancel").style.display = item.max_bid && item.site !== "ebay" ? "" : "none";
 }
 
 // eBay: preview first, then send only after the confirmation names the exact amount
@@ -261,6 +266,16 @@ async function ebaySend(path, payload) {
 async function ebayAlerts(id, tr) {
   try { await api("/api/ebay/" + id + "/alerts", { alerts: tr.querySelector(".alerts").checked }); refresh(); }
   catch (e) { showError("Couldn't change alerts: " + e.message); }
+}
+
+async function deleteItem(id, site, title) {
+  const msg = site === "ebay"
+    ? `Delete "${title}"?\n\nThis cancels the snipe on BidSlammer and removes it from your watchlist.`
+    : `Delete "${title}"?\n\nThis removes it from your ShopGoodwill favorites, so it won't be bid on or send alerts.`;
+  if (!confirm(msg)) return;
+  if (site === "ebay") return ebayCancel(id);
+  try { await api("/api/items/" + id + "/delete", {}); $("err").style.display = "none"; refresh(); }
+  catch (e) { showError("Couldn't delete: " + e.message); }
 }
 
 async function ebayCancel(id) {
@@ -322,11 +337,12 @@ function render(s) {
   const ob = $("otherRows"); ob.innerHTML = "";
   other.forEach((item) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="title"><a target="_blank" rel="noopener"></a><div class="sub"></div></td><td><span class="ends"></span></td><td><button class="small" type="button">Track</button></td>`;
+    tr.innerHTML = `<td class="title"><a target="_blank" rel="noopener"></a><div class="sub"></div></td><td><span class="ends"></span></td><td><button class="small track" type="button">Track</button> <button class="small del" type="button">Delete</button></td>`;
+    tr.querySelector(".del").addEventListener("click", () => deleteItem(item.id, "sgw", item.title));
     const a = tr.querySelector("a"); a.href = item.url; a.textContent = item.title;
     tr.querySelector(".sub").textContent = item.raw_note ? "note: " + item.raw_note : "#" + item.id;
     if (item.end_utc) tr.querySelector(".ends").dataset.end = item.end_utc;
-    tr.querySelector("button").addEventListener("click", () => {
+    tr.querySelector(".track").addEventListener("click", () => {
       const v = prompt("Max bid for this item (leave blank for alerts only).\nThis replaces its current note.");
       if (v === null) return;
       api("/api/items/" + item.id, { max_bid: v.trim() === "" ? null : Number(v), alerts: true }).then(refresh).catch((e) => showError(e.message));

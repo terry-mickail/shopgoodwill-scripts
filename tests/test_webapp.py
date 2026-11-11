@@ -211,3 +211,36 @@ def test_separate_lead_times(client, tmp_path):
 def test_ebay_lead_time_defaults_to_5(client, tmp_path):
     c, sa, _ = _ebay_client(tmp_path, live=True)
     assert sa.ebay.delay() == 5 and c.get("/api/state").get_json()["settings"]["ebay_snipe_seconds"] == 5
+
+def _add_remove_mock(notes, works=True, status=200):
+    def remove(req):
+        iid = req.url.split("itemId=")[1]
+        if works and status == 200:
+            notes.pop(iid, None)
+        return (status, {}, "")
+    ACTIVE["rsps"].add_callback(responses.GET, API + "/Favorite/RemoveItemFromFavoriteList", callback=remove)
+
+def test_delete_removes_favorite_and_confirms(client):
+    c, sa, notes, _ = client
+    _add_remove_mock(notes)
+    assert c.get("/api/state").get_json()["items"][0]["id"] == 7
+    r = c.post("/api/items/7/delete", json={})
+    assert r.get_json()["ok"] and "7" not in notes
+    calls = [x.request.url for x in ACTIVE["rsps"].calls if "RemoveItemFromFavoriteList" in x.request.url]
+    assert calls == [API + "/Favorite/RemoveItemFromFavoriteList?itemId=7"]
+    assert c.get("/api/state").get_json()["items"] == []
+    assert any("Stopped tracking 'Item 7'" in e["message"] for e in sa.ring.recent())
+
+def test_delete_reports_when_item_survives(client):
+    c, sa, notes, _ = client
+    _add_remove_mock(notes, works=False)
+    r = c.post("/api/items/7/delete", json={})
+    assert r.status_code == 400 and "still in your favorites" in r.get_json()["error"] and "7" in notes
+
+def test_delete_reports_http_failure(client, monkeypatch):
+    c, sa, notes, _ = client
+    import webapp as wa
+    monkeypatch.setattr(wa.time, "sleep", lambda s: None)
+    _add_remove_mock(notes, status=500)
+    r = c.post("/api/items/7/delete", json={})
+    assert r.status_code == 400 and "HTTP 500" in r.get_json()["error"]

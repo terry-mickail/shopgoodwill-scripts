@@ -445,6 +445,36 @@ def create_app(sniper_app: SniperApp) -> Flask:
         sa.sniper.logger.info(f"Updated item {item_id}: {what}, alerts {'on' if alerts else 'off'}")
         return jsonify({"ok": True})
 
+    @app.post("/api/items/<int:item_id>/delete")
+    def api_delete_item(item_id: int):
+        """
+        Stop tracking a ShopGoodwill item: remove it from your SGW favorites,
+        which drops its bid and alerts. Confirmed by reading favorites back.
+        """
+
+        title = (sa.get_favorites().get(item_id) or {}).get("title", str(item_id))
+        try:
+            with_one_retry(sa.client.remove_favorite, item_id)
+        except Exception as e:
+            sa.log_http_error(f"remove item {item_id} from favorites", e)
+            return bad(f"Couldn't remove item {item_id}: {shopgoodwill.describe_error(e)}")
+        sa.invalidate(item_id)
+        try:
+            still_there = item_id in sa.get_favorites(force=True)
+        except Exception as e:
+            sa.log_http_error("read favorites", e)
+            return bad(
+                f"Sent the removal for item {item_id} but couldn't confirm it: "
+                f"{shopgoodwill.describe_error(e)}"
+            )
+        if still_there:
+            return bad(
+                f"ShopGoodwill answered, but item {item_id} is still in your favorites. "
+                "Remove it on shopgoodwill.com."
+            )
+        sa.sniper.logger.warning(f"Stopped tracking '{title}' (removed from your ShopGoodwill favorites)")
+        return jsonify({"ok": True})
+
     @app.post("/api/ebay/<int:item_id>")
     def api_ebay_update(item_id: int):
         return ebay_send(item_id, request.get_json(force=True) or {})

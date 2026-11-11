@@ -456,6 +456,26 @@ class Shopgoodwill:
             self.add_favorite_note(item_id, note)
 
     @requires_auth
+    def remove_favorite(self, item_id: int) -> None:
+        """
+        Remove an item from the logged in user's favorites (and so its note).
+
+        The request was captured from shopgoodwill.com's own favorites page on
+        2026-11-11: GET /api/Favorite/RemoveItemFromFavoriteList?itemId=<id>,
+        status 200. Its response body wasn't recorded, so callers should confirm
+        the removal by reading favorites again rather than trusting the 200.
+
+        :param item_id: A valid item ID
+        :type item_id: int
+        :rtype: None
+        """
+
+        self.shopgoodwill_session.get(
+            f"{Shopgoodwill.API_ROOT}/Favorite/RemoveItemFromFavoriteList",
+            params={"itemId": item_id},
+        )
+
+    @requires_auth
     def add_favorite_note(self, item_id: int, note: str) -> None:
         """
         Given an Item ID of an item in the logged in user's favorites,
